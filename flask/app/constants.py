@@ -2,7 +2,7 @@
 DEFAULT_ASN = 3701
 CUSTOMER_BGP_COMMUNITY = '3701:370'  # Prefixes learned from directly connected customers
 TRANSIT_BGP_COMMUNITY = '3701:380'  # Prefixes learned from *paid* transit providers
-PEER_BGP_COMMUNITY = '3701:39.'  # Prefixes learned from bilateral peers and exchanges
+PEER_BGP_COMMUNITY = '3701:39'  # Community Prefix (starts with) for Prefixes learned from bilateral peers and exchanges
 BGP_COMMUNITY_MAP = {
       '3701:111': 'Level3-Prepend-1',
       '3701:112': 'Level3-Prepend-2',
