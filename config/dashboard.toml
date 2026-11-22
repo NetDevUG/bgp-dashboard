@@ -1,0 +1,51 @@
+# BGP Dashboard configuration (replaces flask/app/constants.py)
+# Changes take effect after restarting the web container: docker compose restart web
+
+[network]
+asn = 3701
+# Prefixes learned from directly connected customers
+customer_community = "3701:370"
+# Prefixes learned from *paid* transit providers
+transit_community = "3701:380"
+# Community prefix (starts with) for prefixes learned from bilateral peers and exchanges
+peer_community_prefix = "3701:39"
+
+[dashboard]
+# Seconds between the cheap counters (peers, table sizes, next hops)
+stats_interval = 60
+# Seconds between the expensive statistics (peer table, communities, CIDR, AS path)
+advanced_stats_interval = 300
+# Days of counter history kept for the trend graphs
+stats_history_days = 14
+top_peers = 5
+# Above this many downstream ASNs no name lookups are done
+large_query_threshold = 200
+# Timeout for a single DNS lookup (ASN names, reverse DNS) in seconds
+dns_timeout = 2.0
+
+# Names shown for BGP communities
+[communities]
+"3701:111" = "Level3-Prepend-1"
+"3701:112" = "Level3-Prepend-2"
+"3701:113" = "Level3-SEAT-Depref"
+"3701:114" = "Level3-WSAC-Depref"
+"3701:121" = "Level3-WSAC-Prepend-1"
+"3701:122" = "Level3-WSAC-Prepend-2"
+"3701:370" = "Customers"
+"3701:371" = "Customers-NO-I2-RE"
+"3701:372" = "Customers-NO-I2-CP"
+"3701:380" = "Transit"
+"3701:381" = "Level3-SEAT"
+"3701:382" = "Level3-WSAC"
+"3701:390" = "OIX"
+"3701:391" = "I2-RE"
+"3701:392" = "NWAX"
+"3701:393" = "PNWGP"
+"3701:394" = "I2-CPS"
+"3701:395" = "SeattleIX"
+"3701:500" = "PT-ODE-USERS"
+"3701:501" = "PT-ODE-PROVIDERS"
+"3701:666" = "BH-LOCAL"
+"64496:0" = "Cymru-UTRS"
+"65333:888" = "Cymru-BOGONs"
+"65535:65281" = "No-Export"

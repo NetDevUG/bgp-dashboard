@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BGP Dashboard · AS{{ source_asn }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='dashboard.css') }}">
+  <script>
+    // apply the stored theme before first paint
+    (function () {
+      var t = localStorage.getItem("bgp-theme");
+      if (t) document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
+</head>
+<body>
+<div class="viz-root">
+  <header class="topbar">
+    <div class="brand">
+      <h1>AS{{ source_asn }}</h1>
+      {% if source_asn_name and source_asn_name != "(DNS Error)" %}<p class="muted">{{ source_asn_name }}</p>{% endif %}
+    </div>
+    <form id="search" class="search" autocomplete="off">
+      <input id="searchInput" type="search" placeholder="IP, prefix, hostname or ASN (e.g. 8.8.8.8, AS3356)"
+             aria-label="Looking glass search">
+      <button type="submit">Look up</button>
+    </form>
+    <div class="status">
+      <span id="statusDot" class="dot" aria-hidden="true"></span>
+      <span id="statusText" class="muted">Connecting…</span>
+      <button id="themeToggle" class="ghost" type="button" title="Toggle dark mode" aria-label="Toggle dark mode"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 1.5a6.5 6.5 0 0 1 0 13z" fill="currentColor"/></svg></button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Looking glass result (hidden until a search is made) -->
+    <section id="lookup" class="card lookup" hidden>
+      <div class="card-head">
+        <h2 id="lookupTitle">Lookup</h2>
+        <div class="card-actions">
+          <a id="lookupRaw" href="#" target="_blank" rel="noopener">JSON</a>
+          <button id="lookupClose" class="ghost" type="button" aria-label="Close lookup">✕</button>
+        </div>
+      </div>
+      <div id="lookupBody"></div>
+    </section>
+
+    <div class="filter-row">
+      <span class="muted">Trend range</span>
+      <div class="segmented" role="radiogroup" aria-label="Trend range" id="rangePicker">
+        <button type="button" data-hours="1">1h</button>
+        <button type="button" data-hours="6">6h</button>
+        <button type="button" data-hours="24" class="active">24h</button>
+        <button type="button" data-hours="168">7d</button>
+      </div>
+      <span class="muted small" id="updated"></span>
+    </div>
+
+    <section class="tiles" id="tiles" aria-label="Key figures"></section>
+
+    <section class="grid-2-1">
+      <div class="card">
+        <div class="card-head">
+          <h2>Peers <small class="muted">prefixes per next-hop ASN</small></h2>
+          <input id="peerFilter" class="filter" type="search" placeholder="Filter…" aria-label="Filter peers">
+        </div>
+        <div class="table-wrap">
+          <table id="peerTable" class="data">
+            <thead>
+            <tr>
+              <th data-key="asn" class="num">ASN</th>
+              <th data-key="name">Name</th>
+              <th data-key="ipv4_origin_count" class="num">IPv4<br>originated</th>
+              <th data-key="ipv4_nexthop_count" class="num">IPv4<br>next hop</th>
+              <th data-key="ipv6_origin_count" class="num">IPv6<br>originated</th>
+              <th data-key="ipv6_nexthop_count" class="num">IPv6<br>next hop</th>
+              <th data-key="asn_count" class="num">Downstream<br>ASNs</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Top peers <small class="muted">prefixes received</small></h2></div>
+        <div id="topPeers" class="hbars"></div>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <div class="card-head"><h2>Peering prefixes <small class="muted">per exchange / peer community</small></h2></div>
+        <div id="peeringBars" class="hbars"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Transit vs. peering <small class="muted">share of all prefixes</small></h2></div>
+        <div id="transitShare"></div>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="card">
+        <div class="card-head"><h2>IPv4 prefix length <small class="muted">prefix count</small></h2></div>
+        <div id="cidr4" class="chart"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>IPv6 prefix length <small class="muted">prefix count</small></h2></div>
+        <div id="cidr6" class="chart"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>BGP communities <small class="muted">active prefixes per community</small></h2>
+        <input id="communityFilter" class="filter" type="search" placeholder="Filter…" aria-label="Filter communities">
+      </div>
+      <div class="table-wrap short">
+        <table id="communityTable" class="data">
+          <thead><tr><th data-key="community">Community</th><th data-key="name">Name</th><th data-key="count" class="num">Prefixes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="muted small">
+    <a href="https://github.com/NetDevUG/bgp-dashboard">BGP Dashboard</a> ·
+    <a href="/docs">API documentation</a> ·
+    <a href="/bgp/api/v1.0/stats">Raw statistics</a>
+  </footer>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+</div>
+
+<script id="config" type="application/json">{{ config | tojson }}</script>
+<script src="{{ url_for('static', path='dashboard.js') }}" defer></script>
+</body>
+</html>

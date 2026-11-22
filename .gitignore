@@ -1,10 +1,13 @@
 **.pyc
+**/__pycache__
+**/.pytest_cache
 **/log
 !/log/sample_data.log
-**/__pycache__
 **/.ropeproject
 /db
 !.gitkeep
 **/venv
+**/.venv
 *.vscode
 *.idea
+.env
