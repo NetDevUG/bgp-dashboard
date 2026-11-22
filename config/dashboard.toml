@@ -2,13 +2,13 @@
 # Changes take effect after restarting the web container: docker compose restart web
 
 [network]
-asn = 3701
+asn = 216333
 # Prefixes learned from directly connected customers
-customer_community = "3701:370"
+customer_community = "216333:100:130"
 # Prefixes learned from *paid* transit providers
-transit_community = "3701:380"
+transit_community = "216333:100:100"
 # Community prefix (starts with) for prefixes learned from bilateral peers and exchanges
-peer_community_prefix = "3701:39"
+peer_community_prefix = "216333:101:"
 
 [dashboard]
 # Seconds between the cheap counters (peers, table sizes, next hops)
@@ -41,27 +41,27 @@ unstable_min_changes = 3
 
 # Names shown for BGP communities
 [communities]
-"3701:111" = "Level3-Prepend-1"
-"3701:112" = "Level3-Prepend-2"
-"3701:113" = "Level3-SEAT-Depref"
-"3701:114" = "Level3-WSAC-Depref"
-"3701:121" = "Level3-WSAC-Prepend-1"
-"3701:122" = "Level3-WSAC-Prepend-2"
-"3701:370" = "Customers"
-"3701:371" = "Customers-NO-I2-RE"
-"3701:372" = "Customers-NO-I2-CP"
-"3701:380" = "Transit"
-"3701:381" = "Level3-SEAT"
-"3701:382" = "Level3-WSAC"
-"3701:390" = "OIX"
-"3701:391" = "I2-RE"
-"3701:392" = "NWAX"
-"3701:393" = "PNWGP"
-"3701:394" = "I2-CPS"
-"3701:395" = "SeattleIX"
-"3701:500" = "PT-ODE-USERS"
-"3701:501" = "PT-ODE-PROVIDERS"
-"3701:666" = "BH-LOCAL"
+"216333:100:100" = "Transit"
+"216333:100:130" = "Customers"
+"216333:101:13335" = "Cloudflare"
+"216333:101:6939" = "HE"
+"216333:101:16276" = "OVH"
+"216333:101:32934" = "Meta"
+"216333:101:15169" = "Google"
+"216333:101:24940" = "Hetzner"
+"216333:101:41441" = "Speed-IX"
+"216333:101:50673" = "Serverius"
+"216333:101:50917" = "BackboneDirectt"
+"216333:101:6777" = "AMS-IX"
+"216333:101:206221" = "ERAIX"
+"216333:101:56393" = "FrysIX"
+"216333:101:56584" = "INTERIX"
+"216333:101:49917" = "LSIX"
+"216333:101:47498" = "FogIXP"
+"216333:101:49453" = "GlobalLayer"
+"216333:101:6830" = "Liberty Global"
+"216333:101:50869" = "FreeIX"
+"216333:101:174" = "Cogent"
 "64496:0" = "Cymru-UTRS"
 "65333:888" = "Cymru-BOGONs"
 "65535:65281" = "No-Export"
