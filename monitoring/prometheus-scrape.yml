@@ -1,0 +1,6 @@
+# Add to the scrape_configs of your prometheus.yml
+scrape_configs:
+  - job_name: bgp-dashboard
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["bgp-dashboard.example.net:80"]   # host and WEB_PORT of the dashboard

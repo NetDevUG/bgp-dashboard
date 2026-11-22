@@ -23,6 +23,22 @@ large_query_threshold = 200
 # Timeout for a single DNS lookup (ASN names, reverse DNS) in seconds
 dns_timeout = 2.0
 
+[monitoring]
+# Own prefixes that must be visible in the BGP table. For each one the dashboard
+# checks that it is present, originated by the own AS (or locally, empty AS path)
+# and that no more specific prefix is announced by a different origin AS.
+# Example: own_prefixes = ["192.0.2.0/24", "2001:db8::/32"]
+own_prefixes = []
+# Further origin ASNs that may announce (parts of) the own prefixes,
+# e.g. customers with assigned space or a DDoS scrubbing provider.
+allowed_origins = []
+check_more_specifics = true
+# "Unstable prefixes": changes counted over this window
+unstable_window_hours = 24
+unstable_top = 20
+# Prefixes with at least this many changes in the window count as unstable (/metrics)
+unstable_min_changes = 3
+
 # Names shown for BGP communities
 [communities]
 "3701:111" = "Level3-Prepend-1"

@@ -9,6 +9,10 @@ A "realtime" web view of your BGP network
 - What AS path does a prefix take out of my network?
 - How many routes and autonomous systems do I see, and how does that change over time?
 - BGP Looking Glass (IPv4/IPv6/hostname/ASN) incl. route history
+- Are all BGP sessions up? When did they flap and why?
+- Are my own prefixes visible, with the right origin AS – or is someone announcing (parts of) them?
+- Which prefixes are unstable (flapping, path changes)?
+- Prometheus metrics and ready-made alert rules
 
 
 How it works
@@ -27,10 +31,13 @@ How it works
   kept in its `history` (newest first, `MAX_PREFIX_HISTORY` entries, default 100).
 - If `gobgpd` or the collector dies, the container exits and Docker restarts it. On start all
   stored prefixes are marked inactive and the RIB is learned again.
+- Every 10s the collector also reads `gobgp neighbor -j` and stores the state of all BGP sessions
+  plus every state change (session events, kept 90 days) and a heartbeat.
 
 ###### mongodb
 - Stores the routes (`bgp`), cached ASN names (`asn_names`) and the counter history for the
-  trend graphs (`stats_history`, kept for `stats_history_days`).
+  trend graphs (`stats_history`, kept for `stats_history_days`), the BGP session state (`neighbors`,
+  `neighbor_events`) and the collector status (`collector_status`).
 
 ###### web (`./web`)
 - One FastAPI process. A single background task computes all statistics with MongoDB
@@ -40,12 +47,68 @@ How it works
 - ASN names (Team Cymru DNS) and reverse DNS are cached (ASN names also in MongoDB).
 - The dashboard is a single page without any CDN dependencies; it refreshes itself every 20s,
   keeps trend graphs across reloads, supports dark mode and has a built-in looking glass.
-- Interactive API documentation: `http://<host>/docs`, health check: `http://<host>/healthz`.
+- Interactive API documentation: `http://<host>/docs`, health check: `http://<host>/healthz`,
+  Prometheus metrics: `http://<host>/metrics`.
 
 
 Screenshot
 ---------
 ![screenshot](bgp-dashboard.png)
+
+Monitoring: BGP sessions with event log, own prefixes (here with a simulated hijack), unstable prefixes
+
+![monitoring](docs/monitoring.png)
+
+
+Monitoring
+---------
+###### BGP sessions
+The session table shows every neighbor configured in `gobgpd.conf` with state, up/down time,
+received/accepted prefixes and the last disconnect reason. *Drops* counts how often an established
+session was lost – also when it came back between two polls. All state changes are listed under
+*Session events*. The status in the top right corner turns red when a session is down
+(administratively disabled sessions are ignored).
+
+###### Own prefixes
+List your prefixes in `config/dashboard.toml`:
+```toml
+[monitoring]
+own_prefixes = ["192.0.2.0/24", "2001:db8::/32"]
+allowed_origins = [64500]   # optional: other ASNs allowed to originate them
+```
+Every minute each prefix is checked for
+- **Missing** – not in the BGP table (or withdrawn),
+- **Foreign origin** – originated by an AS other than your own (locally originated = empty AS path)
+  or one of `allowed_origins` → possible hijack or misconfiguration,
+- **Foreign more-specific** – a more specific prefix inside it is announced by a foreign origin AS
+  → possible (sub-prefix) hijack.
+
+The dashboard only sees what your router(s) send to GoBGP: this detects problems inside your view
+of the Internet, not how others see your prefixes (use RIPE RIS / BGP monitoring services for that).
+
+###### Unstable prefixes
+The collector records the time of every real route change (attribute change, withdraw,
+re-announce; not the re-learning after a restart). The dashboard lists the prefixes with the most
+changes in the last `unstable_window_hours` (default 24h) plus the total churn.
+
+###### Prometheus
+Scrape `http://<host>/metrics` (example in [monitoring/prometheus-scrape.yml](monitoring/prometheus-scrape.yml))
+and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.yml):
+
+| Alert | Fires when |
+|-------|------------|
+| `BGPSessionDown` | a session (not admin down) is not established for 2 min |
+| `BGPSessionFlapping` | ≥ 3 session drops within an hour |
+| `BGPSessionPrefixesDropped` | a session lost more than half of its accepted prefixes |
+| `BGPOwnPrefixMissing` / `…WrongOrigin` / `…ForeignMoreSpecific` | see *Own prefixes* |
+| `BGPTableSizeDrop` | the IPv4/IPv6 table shrank by more than 10 % within an hour |
+| `BGPHighRouteChurn` | unusually many route changes |
+| `BGPCollectorDown`, `BGPNeighborPollFailing`, `BGPDashboardStatsStale`, `BGPDashboardDown` | the dashboard itself has a problem |
+
+Test the rules with `promtool test rules monitoring/bgp-alerts.test.yml`.
+Main metrics: `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
+`bgp_own_prefix_ok`, `bgp_prefixes`, `bgp_peer_prefixes`, `bgp_route_changes`,
+`bgp_unstable_prefixes`, `bgp_collector_heartbeat_timestamp_seconds`.
 
 
 Install
@@ -76,6 +139,8 @@ Environment variables (see `docker-compose.yml`):
 | `MONGO_VERSION` | `8` | MongoDB image tag |
 | `MONGO_CACHE_GB` | `1` | WiredTiger cache size |
 | `MAX_PREFIX_HISTORY` | `100` | Versions kept per prefix (`0` = unlimited) |
+| `NEIGHBOR_POLL_INTERVAL` | `10` | Seconds between BGP session polls (`0` = off) |
+| `NEIGHBOR_EVENT_DAYS` | `90` | Days session events are kept |
 | `GOBGP_VERSION` (build arg) | `4.11.0` | GoBGP release built into the image |
 
 
@@ -84,7 +149,8 @@ Upgrading from the Flask version
 - `flask/app/constants.py` was replaced by `config/dashboard.toml` – copy your ASN, communities
   and community names over.
 - `gobgp_to_mongo.py` and `bgp_attributes.py` moved to `./gobgp/`.
-- The MongoDB data in `./db` is reused; documents get updated on the fly.
+- The MongoDB data in `./db` is reused; documents get updated on the fly. On its first start the
+  new collector adds two index fields to all stored prefixes (takes about a minute for a full table).
 - MongoDB is now pinned to the major version `8` instead of `latest`. If your data was written by
   a newer major version, set `MONGO_VERSION` accordingly.
 - All API URLs (`/bgp/api/v1.0/...`) and their JSON fields stay the same. New:
@@ -107,6 +173,11 @@ API
 | `GET /bgp/api/v1.0/asn/<asn>/nexthop[/ipv4\|ipv6]` | prefixes with that next-hop ASN |
 | `GET /bgp/api/v1.0/asn/<asn>/transit` | prefixes with the ASN anywhere in the AS path |
 | `GET /bgp/api/v1.0/domain/<domain>` | prefixes of the network hosting the domain's name server |
+| `GET /bgp/api/v1.0/neighbors` | BGP sessions with state, uptime, drops, prefixes |
+| `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
+| `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
+| `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /metrics` | Prometheus metrics |
 
 
 Development

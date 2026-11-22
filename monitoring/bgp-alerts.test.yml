@@ -1,0 +1,61 @@
+# promtool test rules monitoring/bgp-alerts.test.yml
+rule_files: [bgp-alerts.yml]
+evaluation_interval: 30s
+tests:
+  - interval: 30s
+    input_series:
+      - series: 'bgp_session_up{neighbor="192.0.2.1",peer_asn="3356",description="Transit"}'
+        values: '1 1 0 0 0 0 0 0'
+      - series: 'bgp_session_admin_down{neighbor="192.0.2.1",peer_asn="3356",description="Transit"}'
+        values: '0x8'
+      - series: 'bgp_session_up{neighbor="192.0.2.9",peer_asn="6939",description="disabled"}'
+        values: '0x8'
+      - series: 'bgp_session_admin_down{neighbor="192.0.2.9",peer_asn="6939",description="disabled"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: BGPSessionDown
+        exp_alerts: []
+      - eval_time: 3m30s
+        alertname: BGPSessionDown
+        exp_alerts:
+          - exp_labels: {severity: critical, neighbor: 192.0.2.1, peer_asn: "3356", description: Transit}
+            exp_annotations:
+              summary: "BGP session 192.0.2.1 (AS3356) is down"
+              description: "Transit has not been established for 2 minutes."
+
+  - interval: 1m
+    input_series:
+      - series: 'bgp_session_drops_total{neighbor="192.0.2.1",peer_asn="3356",description="Transit"}'
+        values: '0 0 1 1 2 3 3'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BGPSessionFlapping
+        exp_alerts:
+          - exp_labels: {severity: warning, neighbor: 192.0.2.1, peer_asn: "3356", description: Transit}
+            exp_annotations:
+              summary: "BGP session 192.0.2.1 (AS3356) is flapping"
+              description: "3 session drops in the last hour."
+
+  - interval: 30s
+    input_series:
+      - series: 'bgp_own_prefix_visible{prefix="192.0.2.0/24"}'
+        values: '1x6'
+      - series: 'bgp_own_prefix_origin_ok{prefix="192.0.2.0/24"}'
+        values: '1 1 0 0 0 0 0'
+      - series: 'bgp_own_prefix_foreign_more_specifics{prefix="198.51.100.0/24"}'
+        values: '0 0 0 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BGPOwnPrefixWrongOrigin
+        exp_alerts:
+          - exp_labels: {severity: critical, prefix: 192.0.2.0/24}
+            exp_annotations:
+              summary: "Own prefix 192.0.2.0/24 is originated by a foreign AS (possible hijack)"
+      - eval_time: 3m
+        alertname: BGPOwnPrefixForeignMoreSpecific
+        exp_alerts:
+          - exp_labels: {severity: critical, prefix: 198.51.100.0/24}
+            exp_annotations:
+              summary: "Foreign more specific of own prefix 198.51.100.0/24 (possible hijack)"
+              description: "2 more specific prefix(es) with a foreign origin AS – see the dashboard."

@@ -28,6 +28,17 @@ class Settings:
     large_query_threshold: int = 200
     dns_timeout: float = 2.0
 
+    # Monitoring of own prefixes
+    own_prefixes: tuple[str, ...] = ()
+    allowed_origins: tuple[int, ...] = ()
+    check_more_specifics: bool = True
+    # Unstable prefixes
+    unstable_window_hours: int = 24
+    unstable_top: int = 20
+    unstable_min_changes: int = 3
+    # BGP sessions: data older than this is shown as stale (collector polls every 10s)
+    neighbor_stale_seconds: int = 60
+
     mongo_uri: str = "mongodb://mongodb:27017"
     mongo_db: str = "bgp"
     # Disable the background statistics job (used by tests)
@@ -44,10 +55,9 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
                 data = tomllib.load(fh)
             break
 
-    network = data.get("network", {})
-    dashboard = data.get("dashboard", {})
+    sections = {**data.get("network", {}), **data.get("dashboard", {}), **data.get("monitoring", {})}
     known = Settings.__dataclass_fields__
-    kwargs = {k: v for k, v in {**network, **dashboard}.items() if k in known}
+    kwargs = {k: (tuple(v) if isinstance(v, list) else v) for k, v in sections.items() if k in known}
     kwargs["community_names"] = {str(k): str(v) for k, v in data.get("communities", {}).items()}
     kwargs["mongo_uri"] = os.environ.get("MONGO_URI", Settings.mongo_uri)
     kwargs["mongo_db"] = os.environ.get("MONGO_DB", Settings.mongo_db)

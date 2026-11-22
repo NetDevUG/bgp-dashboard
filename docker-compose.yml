@@ -10,6 +10,8 @@ services:
     environment:
       MONGO_URI: mongodb://mongodb:27017
       MAX_PREFIX_HISTORY: "100"
+      NEIGHBOR_POLL_INTERVAL: "10"   # seconds, 0 = no BGP session monitoring
+      NEIGHBOR_EVENT_DAYS: "90"
       LOG_LEVEL: INFO
     depends_on:
       mongodb:

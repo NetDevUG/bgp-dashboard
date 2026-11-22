@@ -29,6 +29,7 @@ from pymongo.database import Database
 from pymongo.errors import PyMongoError
 
 import bgp_attributes as BGP
+from neighbor_poller import NeighborPoller
 
 log = logging.getLogger("gobgp_to_mongo")
 
@@ -38,9 +39,15 @@ MONGO_DB = os.environ.get("MONGO_DB", "bgp")
 MAX_PREFIX_HISTORY = int(os.environ.get("MAX_PREFIX_HISTORY", "100"))
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "2000"))
 BATCH_WAIT = float(os.environ.get("BATCH_WAIT", "0.5"))
+NEIGHBOR_POLL_INTERVAL = float(os.environ.get("NEIGHBOR_POLL_INTERVAL", "10"))  # 0 = off
+NEIGHBOR_EVENT_DAYS = int(os.environ.get("NEIGHBOR_EVENT_DAYS", "90"))
+GOBGP_CLI = os.environ.get("GOBGP_CLI", "gobgp")
+# Timestamps of the last changes kept per prefix (for the "unstable prefixes" view)
+MAX_CHANGE_TIMES = 50
 
-# Keys that are bookkeeping only and are ignored when comparing two versions of a route.
-_IGNORED_ON_COMPARE = {"_id", "history", "age", "active"}
+# Bookkeeping fields: ignored when comparing two versions of a route, not copied into the history.
+_BOOKKEEPING = {"history", "age", "active", "change_times", "last_change", "first_seen",
+                "net_start", "prefix_len"}
 
 
 # --------------------------------------------------------------------------- #
@@ -74,8 +81,45 @@ def initialize_database(db: Database) -> None:
     coll.create_index([("origin_asn", ASCENDING), ("ip_version", ASCENDING), ("active", ASCENDING)])
     coll.create_index([("communities", ASCENDING), ("active", ASCENDING)])
     coll.create_index([("as_path.1", ASCENDING), ("nexthop_asn", ASCENDING), ("active", ASCENDING)])
+    coll.create_index([("ip_version", ASCENDING), ("net_start", ASCENDING)])
+    coll.create_index("last_change", sparse=True)
+    backfill_range_fields(db)
     result = coll.update_many({"active": True}, {"$set": {"active": False}})
+    db["collector_status"].update_one(
+        {"_id": "collector"},
+        {"$set": {"started": datetime.now(timezone.utc)}}, upsert=True)
     log.info("Database initialised, %d prefixes marked inactive", result.modified_count)
+
+
+def net_fields(prefix: str) -> dict:
+    """Fields used for range queries (more specifics of a prefix).
+
+    ``net_start`` is the network address as fixed width hex string, so string
+    comparison equals numeric comparison within one IP version.
+    """
+    net = ipaddress.ip_network(prefix, strict=False)
+    width = 8 if net.version == 4 else 32
+    return {"net_start": format(int(net.network_address), f"0{width}x"), "prefix_len": net.prefixlen}
+
+
+def backfill_range_fields(db: Database, batch_size: int = 5000) -> int:
+    """Add ``net_start``/``prefix_len`` to documents written by older versions."""
+    coll = db["bgp"]
+    ops, total = [], 0
+    for doc in coll.find({"prefix_len": {"$exists": False}}, {"_id": 1}):
+        try:
+            ops.append(UpdateOne({"_id": doc["_id"]}, {"$set": net_fields(doc["_id"])}))
+        except ValueError:
+            continue
+        if len(ops) >= batch_size:
+            coll.bulk_write(ops, ordered=False)
+            total, ops = total + len(ops), []
+    if ops:
+        coll.bulk_write(ops, ordered=False)
+        total += len(ops)
+    if total:
+        log.info("Added range fields to %d existing prefixes", total)
+    return total
 
 
 # --------------------------------------------------------------------------- #
@@ -119,6 +163,7 @@ def build_json(update_entry: dict) -> dict:
     doc = {
         "_id": prefix,
         "ip_version": ipaddress.ip_network(prefix, strict=False).version,
+        **net_fields(prefix),
         "origin_asn": None,
         "nexthop": None,
         "nexthop_asn": None,
@@ -187,34 +232,45 @@ def build_json(update_entry: dict) -> dict:
 
 def same_route(new: dict, old: dict) -> bool:
     """Compare two versions of a prefix, ignoring bookkeeping fields."""
-    keys = (new.keys() | old.keys()) - _IGNORED_ON_COMPARE
+    keys = (new.keys() | old.keys()) - _BOOKKEEPING - {"_id"}
     return all(new.get(k) == old.get(k) for k in keys)
 
 
 # --------------------------------------------------------------------------- #
 # Writing
 # --------------------------------------------------------------------------- #
-def _history_push(old: dict) -> dict:
-    entry = {k: v for k, v in old.items() if k not in ("history", "active")}
+def _strip(doc: dict) -> dict:
+    return {k: v for k, v in doc.items() if k not in _BOOKKEEPING or k in ("age", "active")}
+
+
+def _history_push(old: dict, now: datetime) -> dict:
+    entry = {k: v for k, v in old.items() if k == "age" or k not in _BOOKKEEPING}
     spec: dict = {"$each": [entry], "$position": 0}
     if MAX_PREFIX_HISTORY > 0:
         spec["$slice"] = MAX_PREFIX_HISTORY
-    return {"history": spec}
+    return {"history": spec,
+            "change_times": {"$each": [now], "$slice": -MAX_CHANGE_TIMES}}
 
 
-def plan_update(new: dict, old: dict | None) -> tuple[UpdateOne, dict]:
-    """Return the write operation for *new* and the resulting stored state."""
+def plan_update(new: dict, old: dict | None,
+                now: datetime | None = None) -> tuple[UpdateOne, dict, bool]:
+    """Return the write operation for *new*, the resulting state and whether the route changed."""
+    now = now or datetime.now(timezone.utc)
     if new["withdrawal"] and old is not None:
         # Withdrawals only flip the state, the last known attributes are kept.
-        new = {**old, "withdrawal": True, "active": False, "age": new["age"] or old.get("age")}
+        new = {**_strip(old), "withdrawal": True, "active": False,
+               "age": new["age"] or old.get("age"),
+               "net_start": new["net_start"], "prefix_len": new["prefix_len"]}
 
+    changed = False
     if old is None:
-        update = {"$set": new, "$setOnInsert": {"history": []}}
+        update = {"$set": new, "$setOnInsert": {"history": [], "first_seen": now}}
     elif same_route(new, old):
-        update = {"$set": {"active": new["active"], "age": new["age"]}}
+        update = {"$set": {k: new[k] for k in ("active", "age", "net_start", "prefix_len")}}
     else:
-        update = {"$set": new, "$push": _history_push(old)}
-    return UpdateOne({"_id": new["_id"]}, update, upsert=True), new
+        changed = True
+        update = {"$set": {**new, "last_change": now}, "$push": _history_push(old, now)}
+    return UpdateOne({"_id": new["_id"]}, update, upsert=True), new, changed
 
 
 def process_batch(db: Database, lines: Iterable[str]) -> int:
@@ -230,15 +286,23 @@ def process_batch(db: Database, lines: Iterable[str]) -> int:
         return 0
 
     coll = db["bgp"]
+    now = datetime.now(timezone.utc)
     prefixes = list({r["_id"] for r in routes})
-    current = {doc["_id"]: doc for doc in coll.find({"_id": {"$in": prefixes}}, {"history": 0})}
+    current = {doc["_id"]: doc for doc in
+               coll.find({"_id": {"$in": prefixes}}, {"history": 0, "change_times": 0})}
 
-    operations = []
+    operations, changes = [], 0
     for route in routes:  # keep order: the same prefix can occur several times per batch
-        op, state = plan_update(route, current.get(route["_id"]))
+        op, state, changed = plan_update(route, current.get(route["_id"]), now)
         operations.append(op)
         current[route["_id"]] = state
+        changes += changed
     coll.bulk_write(operations, ordered=True)
+    db["collector_status"].update_one({"_id": "collector"}, {
+        "$set": {"last_update": now},
+        "$inc": {"paths_total": len(routes), "route_changes_total": changes,
+                 "withdrawals_total": sum(1 for r in routes if r["withdrawal"])},
+    }, upsert=True)
     return len(routes)
 
 
@@ -282,6 +346,8 @@ def main() -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     db = db_connect()
     initialize_database(db)
+    if NEIGHBOR_POLL_INTERVAL > 0:
+        NeighborPoller(db, NEIGHBOR_POLL_INTERVAL, GOBGP_CLI, NEIGHBOR_EVENT_DAYS).start()
     total = 0
     last_report = time.monotonic()
     for batch in batched_lines(sys.stdin):

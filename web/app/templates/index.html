@@ -61,6 +61,53 @@
     <section class="grid-2-1">
       <div class="card">
         <div class="card-head">
+          <h2>BGP sessions <small class="muted" id="sessionSummary"></small></h2>
+          <span class="muted small" id="sessionPolled"></span>
+        </div>
+        <div class="table-wrap short">
+          <table id="sessionTable" class="data">
+            <thead>
+            <tr>
+              <th>State</th><th>Neighbor</th><th>Peer AS</th><th>Since</th>
+              <th class="num" title="Established sessions lost (observed)">Drops</th>
+              <th class="num">IPv4<br>rcvd / acc</th><th class="num">IPv6<br>rcvd / acc</th>
+              <th>Last error</th>
+            </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <details id="sessionEvents" class="events">
+          <summary>Session events (last 7 days)</summary>
+          <div id="sessionEventList"></div>
+        </details>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Own prefixes <small class="muted" id="ownSummary"></small></h2></div>
+        <div id="ownPrefixes"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Unstable prefixes <small class="muted" id="unstableSummary"></small></h2>
+      </div>
+      <div class="table-wrap short">
+        <table id="unstableTable" class="data">
+          <thead>
+          <tr>
+            <th>Prefix</th><th class="num" id="unstableWindowHead">Changes</th><th class="num">Last hour</th>
+            <th>Origin AS</th><th class="num">Next-hop AS</th><th>State</th><th>Last change</th>
+          </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="grid-2-1">
+      <div class="card">
+        <div class="card-head">
           <h2>Peers <small class="muted">prefixes per next-hop ASN</small></h2>
           <input id="peerFilter" class="filter" type="search" placeholder="Filter…" aria-label="Filter peers">
         </div>
@@ -126,6 +173,7 @@
   <footer class="muted small">
     <a href="https://github.com/NetDevUG/bgp-dashboard">BGP Dashboard</a> ·
     <a href="/docs">API documentation</a> ·
+    <a href="/metrics">Prometheus metrics</a> ·
     <a href="/bgp/api/v1.0/stats">Raw statistics</a>
   </footer>
 

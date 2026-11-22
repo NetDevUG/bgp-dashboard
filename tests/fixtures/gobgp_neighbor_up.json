@@ -1,0 +1,180 @@
+[
+ {
+  "apply_policy": {
+   "export_policy": {
+    "direction": 2
+   },
+   "import_policy": {
+    "direction": 1
+   }
+  },
+  "conf": {
+   "local_asn": 3701,
+   "neighbor_address": "127.0.0.1",
+   "peer_asn": 3701,
+   "type": 1
+  },
+  "ebgp_multihop": {},
+  "route_reflector": {},
+  "state": {
+   "local_asn": 3701,
+   "messages": {
+    "received": {
+     "update": 2,
+     "open": 1,
+     "keepalive": 9,
+     "total": 12
+    },
+    "sent": {
+     "open": 1,
+     "keepalive": 9,
+     "total": 10
+    }
+   },
+   "neighbor_address": "127.0.0.1",
+   "peer_asn": 3701,
+   "type": 1,
+   "queues": {},
+   "session_state": 6,
+   "admin_state": 1,
+   "router_id": "10.0.0.1",
+   "bfd_state": {
+    "bfd_async": {}
+   }
+  },
+  "timers": {
+   "config": {
+    "connect_retry": 120,
+    "hold_time": 90,
+    "keepalive_interval": 30,
+    "idle_hold_time_after_reset": 30
+   },
+   "state": {
+    "keepalive_interval": 30,
+    "negotiated_hold_time": 90,
+    "uptime": {
+     "seconds": 1795346182
+    }
+   }
+  },
+  "transport": {
+   "local_address": "127.0.0.2",
+   "remote_port": 1791
+  },
+  "route_server": {},
+  "graceful_restart": {},
+  "afi_safis": [
+   {
+    "mp_graceful_restart": {
+     "config": {},
+     "state": {}
+    },
+    "config": {
+     "family": {
+      "afi": 1,
+      "safi": 1
+     },
+     "enabled": true
+    },
+    "state": {
+     "family": {
+      "afi": 1,
+      "safi": 1
+     },
+     "enabled": true,
+     "received": 1,
+     "accepted": 1
+    },
+    "apply_policy": {
+     "export_policy": {
+      "direction": 2
+     },
+     "import_policy": {
+      "direction": 1
+     }
+    },
+    "route_selection_options": {
+     "config": {}
+    },
+    "use_multiple_paths": {
+     "config": {},
+     "ebgp": {
+      "config": {}
+     },
+     "ibgp": {
+      "config": {}
+     }
+    },
+    "route_target_membership": {
+     "config": {}
+    },
+    "long_lived_graceful_restart": {
+     "config": {},
+     "state": {}
+    },
+    "add_paths": {
+     "config": {}
+    }
+   },
+   {
+    "mp_graceful_restart": {
+     "config": {},
+     "state": {}
+    },
+    "config": {
+     "family": {
+      "afi": 2,
+      "safi": 1
+     },
+     "enabled": true
+    },
+    "state": {
+     "family": {
+      "afi": 2,
+      "safi": 1
+     },
+     "enabled": true,
+     "received": 1,
+     "accepted": 1
+    },
+    "apply_policy": {
+     "export_policy": {
+      "direction": 2
+     },
+     "import_policy": {
+      "direction": 1
+     }
+    },
+    "route_selection_options": {
+     "config": {}
+    },
+    "use_multiple_paths": {
+     "config": {},
+     "ebgp": {
+      "config": {}
+     },
+     "ibgp": {
+      "config": {}
+     }
+    },
+    "route_target_membership": {
+     "config": {}
+    },
+    "long_lived_graceful_restart": {
+     "config": {},
+     "state": {}
+    },
+    "add_paths": {
+     "config": {}
+    }
+   }
+  ],
+  "ttl_security": {},
+  "bfd": {
+   "port": 3784,
+   "desired_minimum_tx_interval": 1000000,
+   "required_minimum_receive": 1000000,
+   "detection_multiplier": 3
+  }
+ }
+]

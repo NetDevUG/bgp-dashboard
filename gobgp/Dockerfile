@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 COPY --from=gobgp-build /out/gobgp /out/gobgpd /usr/local/bin/
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
-COPY gobgp_to_mongo.py bgp_attributes.py /app/
+COPY gobgp_to_mongo.py bgp_attributes.py neighbor_poller.py /app/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY gobgpd.conf /etc/gobgp/gobgpd.conf
 RUN chmod +x /usr/local/bin/entrypoint.sh

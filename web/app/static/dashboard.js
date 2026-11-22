@@ -331,6 +331,140 @@
     );
   }
 
+  // ------------------------------------------------------------------ monitoring
+  function fmtDuration(sec) {
+    if (sec === null || sec === undefined) return "–";
+    if (sec < 90) return `${sec}s`;
+    const m = Math.floor(sec / 60), h = Math.floor(m / 60), d = Math.floor(h / 24);
+    if (d > 0) return `${d}d ${h % 24}h`;
+    if (h > 0) return `${h}h ${m % 60}m`;
+    return `${m}m`;
+  }
+  /** Status = icon + label + dot, never colour alone. */
+  function stateBadge(level, label) {
+    const icon = { ok: "✓", err: "✕", warn: "!", muted: "–" }[level] || "";
+    return el("span", { class: "state" }, el("span", { class: `dot ${level}`, "aria-hidden": "true" }),
+      el("span", { class: "state-icon", "aria-hidden": "true", text: icon }), el("span", { text: label }));
+  }
+  const STATE_LABELS = { established: "Established", idle: "Idle", connect: "Connect", active: "Active",
+    opensent: "OpenSent", openconfirm: "OpenConfirm", unknown: "Unknown" };
+  const asLink = (asn) => (asn === null || asn === undefined ? "local" : lookupLink(`AS${asn}`, `AS${asn}`));
+
+  let sessions = null;
+  async function refreshSessions() {
+    try { sessions = await getJSON(`${API}/neighbors`); }
+    catch (e) { sessions = null; }
+    renderSessions();
+    if ($("#sessionEvents").open) loadSessionEvents();
+  }
+
+  function renderSessions() {
+    const tbody = $("#sessionTable tbody");
+    if (!sessions) { fill(tbody, el("tr", {}, el("td", { colspan: 8, class: "empty", text: "Session state unavailable" }))); return; }
+    const sm = sessions.summary;
+    $("#sessionSummary").textContent = sm.total ? `${sm.established} of ${sm.total} established` : "";
+    $("#sessionPolled").textContent = sessions.stale
+      ? `⚠ no update from the collector since ${sessions.polled ? timeAgo(sessions.polled) : "start"}`
+      : `polled ${timeAgo(sessions.polled)}`;
+    if (!sessions.neighbors.length) {
+      fill(tbody, el("tr", {}, el("td", { colspan: 8, class: "empty",
+        text: sessions.error ? `Collector cannot read gobgpd: ${sessions.error}` : "No BGP neighbors configured / reported yet" })));
+      return;
+    }
+    const rank = (n) => (n.established ? 2 : n.admin_down ? 1 : 0);
+    const rows = [...sessions.neighbors].sort((a, b) => rank(a) - rank(b) || a.address.localeCompare(b.address, undefined, { numeric: true }));
+    const fam = (n, f) => {
+      const c = n.families[f];
+      return c ? `${fmt(c.received)} / ${fmt(c.accepted)}` : "–";
+    };
+    fill(tbody, ...rows.map((n) => {
+      const level = n.established ? "ok" : n.admin_down ? "muted" : "err";
+      const label = n.admin_down && !n.established ? "Admin down" : (STATE_LABELS[n.state] || n.state);
+      return el("tr", { class: level === "err" ? "problem" : null },
+        el("td", {}, stateBadge(sessions.stale ? "warn" : level, label)),
+        el("td", {}, n.address, n.description ? el("span", { class: "cell-sub", text: n.description }) : null),
+        el("td", {}, asLink(n.peer_asn), n.peer_name && n.peer_name !== "(DNS Error)" ? el("span", { class: "cell-sub", text: n.peer_name }) : null),
+        el("td", { title: n.since ? new Date(n.since).toLocaleString() : "" }, n.never_established ? "never up" : `${n.established ? "up" : "down"} ${fmtDuration(n.duration_seconds)}`),
+        el("td", { class: "num", text: fmt(n.session_drops) }),
+        el("td", { class: "num", text: fam(n, "ipv4") }),
+        el("td", { class: "num", text: fam(n, "ipv6") }),
+        el("td", { class: "small", text: [n.disconnect_reason, n.disconnect_message].filter(Boolean).join(": ") || "" }));
+    }));
+  }
+
+  async function loadSessionEvents() {
+    const box = $("#sessionEventList");
+    try {
+      const events = await getJSON(`${API}/neighbors/events?hours=168&limit=100`);
+      if (!events.length) { fill(box, el("div", { class: "muted small", text: "No session events in the last 7 days." })); return; }
+      fill(box, el("ol", {}, ...events.map((e) => {
+        const down = e.to_state !== "established";
+        const what = e.from_state
+          ? `${STATE_LABELS[e.from_state] || e.from_state} → ${STATE_LABELS[e.to_state] || e.to_state}`
+          : `first seen: ${STATE_LABELS[e.to_state] || e.to_state}`;
+        return el("li", {},
+          el("time", { datetime: e.ts, text: shortTime(e.ts) }),
+          el("span", {}, stateBadge(down ? "err" : "ok", `${e.neighbor} (AS${e.peer_asn}${e.description ? ", " + e.description : ""})`),
+            el("span", { class: "cell-sub", text: what + (e.reason ? ` – ${e.reason}` : "") + (e.message ? `: ${e.message}` : "") })));
+      })));
+    } catch (err) { fill(box, el("div", { class: "error", text: err.message })); }
+  }
+  $("#sessionEvents").addEventListener("toggle", () => { if ($("#sessionEvents").open) loadSessionEvents(); });
+
+  const PROBLEM_LABELS = {
+    missing: "Missing", wrong_origin: "Foreign origin", foreign_more_specific: "Foreign more-specific",
+    invalid_config: "Invalid config",
+  };
+  function renderOwnPrefixes(s) {
+    const box = $("#ownPrefixes");
+    if (!CONFIG.ownPrefixesConfigured) {
+      fill(box, el("p", { class: "hint" }, "No own prefixes configured. Add them to ",
+        el("code", { text: "config/dashboard.toml" }), " → ", el("code", { text: "[monitoring] own_prefixes" }),
+        " to get alerted when they disappear or someone else announces them."));
+      $("#ownSummary").textContent = "";
+      return;
+    }
+    const list = s.own_prefixes || [];
+    $("#ownSummary").textContent = s.ready ? `${list.filter((p) => p.ok).length} of ${list.length} OK` : "";
+    fill(box, el("div", { class: "own-list" }, ...list.map((p) => {
+      const foreign = p.more_specifics.filter((m) => !m.allowed);
+      const label = p.ok ? "OK" : p.problems.map((x) => PROBLEM_LABELS[x] || x).join(" · ");
+      let detail;
+      if (p.route) {
+        detail = el("div", { class: "detail" }, "Origin ", p.route.origin_asn === null ? `local (AS${CONFIG.asn})` : asLink(p.route.origin_asn),
+          p.route.as_path && p.route.as_path.length ? ` · path ${p.route.as_path.join(" ")}` : "", p.route.age ? ` · since ${p.route.age}` : "");
+      } else {
+        detail = el("div", { class: "detail", text: p.problems.includes("invalid_config") ? "Not a valid prefix" : "Not in the BGP table" });
+      }
+      return el("div", { class: "own-item" + (p.ok ? "" : " problem") },
+        el("div", { class: "own-head" }, lookupLink(p.prefix, p.prefix.split("/")[0]), stateBadge(p.ok ? "ok" : "err", label)),
+        detail,
+        p.more_specifics.length ? el("div", { class: "chips" }, ...p.more_specifics.slice(0, 30).map((m) =>
+          el("a", { class: "chip" + (m.allowed ? "" : " bad"), href: `#lookup=${encodeURIComponent(m.prefix.split("/")[0])}`,
+            title: m.allowed ? "allowed origin" : "foreign origin" }, m.prefix, el("small", { text: m.origin_asn === null ? "local" : `AS${m.origin_asn}` })))) : null,
+        foreign.length > 30 ? el("div", { class: "detail", text: `${foreign.length} foreign more-specifics in total` }) : null);
+    })));
+  }
+
+  function renderUnstable(s) {
+    const u = s.unstable;
+    $("#unstableWindowHead").replaceChildren(`Changes`, el("br"), `${u.window_hours}h`);
+    $("#unstableSummary").textContent =
+      `${fmt(u.route_changes)} route changes in ${u.window_hours}h · ${fmt(u.route_changes_1h)} in the last hour · ` +
+      `${fmt(u.unstable_prefixes)} prefixes with ≥ ${u.min_changes} changes`;
+    const max = Math.max(1, ...u.top.map((t) => t.changes));
+    const tbody = $("#unstableTable tbody");
+    if (!u.top.length) { fill(tbody, el("tr", {}, el("td", { colspan: 7, class: "empty", text: `No route changes in the last ${u.window_hours}h` }))); return; }
+    fill(tbody, ...u.top.map((t) => el("tr", {},
+      el("td", {}, lookupLink(t.prefix, t.prefix.split("/")[0])),
+      el("td", { class: "num" }, el("span", { class: "minibar", style: `width:${Math.round((t.changes / max) * 80)}px` }), fmt(t.changes)),
+      el("td", { class: "num", text: fmt(t.changes_1h) }),
+      el("td", {}, asLink(t.origin_asn), t.origin_name && t.origin_name !== "(DNS Error)" ? el("span", { class: "cell-sub", text: t.origin_name }) : null),
+      el("td", { class: "num" }, t.nexthop_asn === null ? "–" : asLink(t.nexthop_asn)),
+      el("td", {}, stateBadge(t.active ? "ok" : "muted", t.active ? "announced" : "withdrawn")),
+      el("td", { title: new Date(t.last_change).toLocaleString(), text: timeAgo(t.last_change) }))));
+  }
+
   // ------------------------------------------------------------------ data refresh
   let stats = null, history = [], hours = 24, lastBasic = null, lastAdvanced = null;
   const rangeLabel = () => (hours >= 48 ? `${hours / 24}d` : `${hours}h`);
@@ -368,6 +502,7 @@
     transitShare($("#transitShare"), s);
     columnChart($("#cidr4"), s.cidr_breakdown.filter((c) => c.ip_version === 4), "IPv4 prefixes per prefix length");
     columnChart($("#cidr6"), s.cidr_breakdown.filter((c) => c.ip_version === 6), "IPv6 prefixes per prefix length");
+    renderUnstable(s);
   }
 
   async function refresh() {
@@ -378,14 +513,21 @@
         lastBasic = s.basic_updated;
         await loadHistory();
         renderTiles(s, history);
+        renderOwnPrefixes(s);
       }
       if (s.advanced_updated !== lastAdvanced) {
         lastAdvanced = s.advanced_updated;
         renderAdvanced(s);
       }
+      await refreshSessions();
       const age = s.basic_updated ? (Date.now() - new Date(s.basic_updated).getTime()) / 1000 : Infinity;
+      const problems = [];
+      if (sessions && sessions.summary.down) problems.push(`${sessions.summary.down} session${sessions.summary.down > 1 ? "s" : ""} down`);
+      if (s.own_prefix_problems) problems.push(`${s.own_prefix_problems} own prefix problem${s.own_prefix_problems > 1 ? "s" : ""}`);
       if (!s.ready) setStatus("warn", "Computing statistics…");
+      else if (problems.length) setStatus("err", problems.join(" · "));
       else if (age > CONFIG.statsInterval * 3 + 30) setStatus("warn", `Stale – last update ${timeAgo(s.basic_updated)}`);
+      else if (sessions && sessions.stale) setStatus("warn", "Collector not reporting");
       else setStatus("ok", "Live");
       $("#updated").textContent = s.ready
         ? `Counters ${timeAgo(s.basic_updated)} · tables ${timeAgo(s.advanced_updated)} (every ${CONFIG.advancedInterval}s)`

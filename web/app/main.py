@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pymongo import AsyncMongoClient
@@ -20,6 +20,8 @@ from pymongo import AsyncMongoClient
 from .config import Settings, load_settings
 from .dns_cache import DnsCache
 from .lookups import InvalidQuery, Lookups
+from . import monitoring
+from .metrics import render_metrics
 from .stats import StatsService
 
 log = logging.getLogger("bgp_dashboard")
@@ -110,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "statsInterval": settings.stats_interval,
                 "advancedInterval": settings.advanced_stats_interval,
                 "historyDays": settings.stats_history_days,
+                "ownPrefixesConfigured": len(settings.own_prefixes),
             },
         })
 
@@ -121,8 +124,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception as err:  # noqa: BLE001
             mongo = f"error: {err}"
         stats = st(request)
+        collector = {}
+        if mongo == "ok":
+            collector = await monitoring.collector_status(request.app.state.db)
         body = {"status": "ok" if mongo == "ok" else "degraded", "mongo": mongo,
-                "stats_ready": stats.ready, "stats_error": stats.last_error}
+                "stats_ready": stats.ready, "stats_error": stats.last_error,
+                "collector_heartbeat": monitoring._iso(collector.get("heartbeat")),
+                "collector_last_update": monitoring._iso(collector.get("last_update"))}
         return PrettyJSONResponse(body, status_code=200 if mongo == "ok" else 503)
 
     # ------------------------------------------------------------------ #
@@ -149,6 +157,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get(f"{API}/communities", tags=["statistics"])
     async def get_communities(request: Request):
         return st(request).data["communities"]
+
+    # ------------------------------------------------------------------ #
+    # Monitoring
+    # ------------------------------------------------------------------ #
+    @app.get(f"{API}/neighbors", tags=["monitoring"])
+    async def get_neighbors(request: Request):
+        """BGP sessions of gobgpd (polled by the collector every 10s)."""
+        return await monitoring.neighbors(request.app.state.db, settings, request.app.state.dns)
+
+    @app.get(f"{API}/neighbors/events", tags=["monitoring"])
+    async def get_neighbor_events(request: Request,
+                                  hours: float = Query(168, gt=0, le=24 * 366),
+                                  limit: int = Query(200, ge=1, le=5000)):
+        """BGP session state changes, newest first."""
+        return await monitoring.neighbor_events(request.app.state.db, hours, limit)
+
+    @app.get(f"{API}/own-prefixes", tags=["monitoring"])
+    async def get_own_prefixes(request: Request):
+        """Check result for the own prefixes configured in dashboard.toml."""
+        return st(request).data["own_prefixes"]
+
+    @app.get(f"{API}/unstable", tags=["monitoring"])
+    async def get_unstable(request: Request):
+        """Prefixes with the most route changes in the configured window."""
+        return st(request).data["unstable"]
+
+    @app.get("/metrics", response_class=PlainTextResponse, tags=["monitoring"])
+    async def metrics(request: Request):
+        """Prometheus metrics."""
+        db = request.app.state.db
+        stats = st(request)
+        try:
+            sessions = await monitoring.neighbors(db, settings, request.app.state.dns)
+            collector = await monitoring.collector_status(db)
+        except Exception:  # noqa: BLE001 - still export the cached statistics
+            sessions, collector = {}, {}
+        text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector)
+        return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # ------------------------------------------------------------------ #
     # Looking glass

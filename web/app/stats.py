@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .dns_cache import DnsCache
+from .monitoring import check_own_prefixes, unstable_prefixes
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,11 @@ class StatsService:
             "customer_ipv4_prefixes": 0,
             "customer_ipv6_prefixes": 0,
             "transit_percentage": None,
+            "own_prefixes": [],
+            "own_prefix_problems": 0,
+            "unstable": {"window_hours": settings.unstable_window_hours, "route_changes": 0,
+                         "route_changes_1h": 0, "changed_prefixes": 0, "unstable_prefixes": 0,
+                         "min_changes": settings.unstable_min_changes, "top": []},
             "timestamp": _timestamp(),
             "basic_updated": None,
             "advanced_updated": None,
@@ -100,7 +106,10 @@ class StatsService:
             self.coll.distinct("nexthop", ACTIVE),
         )
         self.peer_asns = set(peers)
+        own = await check_own_prefixes(self.coll, self.settings)
         self.data.update(
+            own_prefixes=own,
+            own_prefix_problems=sum(1 for p in own if not p["ok"]),
             peer_count=len(peers),
             ipv4_table_size=v4,
             ipv6_table_size=v6,
@@ -186,9 +195,10 @@ class StatsService:
 
     async def update_advanced_stats(self) -> None:
         started = time.monotonic()
-        nexthop_rows, cidrs, avg_len, communities, customer_asns = await asyncio.gather(
+        nexthop_rows, cidrs, avg_len, communities, customer_asns, unstable = await asyncio.gather(
             self.nexthop_breakdown(), self.cidrs(), self.avg_as_path_len(),
-            self.communities_count(), self.customer_asns())
+            self.communities_count(), self.customer_asns(),
+            unstable_prefixes(self.coll, self.settings, self.dns))
 
         by_nexthop = {row["_id"]: row for row in nexthop_rows}
         relevant = list(set(by_nexthop) | set(customer_asns))
@@ -229,6 +239,7 @@ class StatsService:
             customer_ipv4_prefixes=sum(c["ipv4_origin_count"] for c in customers),
             customer_ipv6_prefixes=sum(c["ipv6_origin_count"] for c in customers),
             transit_percentage=round(transit / total * 100, 1) if total else None,
+            unstable=unstable,
             timestamp=_timestamp(),
             advanced_updated=datetime.now(timezone.utc).isoformat(),
         )

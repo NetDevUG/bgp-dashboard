@@ -206,3 +206,26 @@ a.chip:hover { text-decoration: none; outline: 1px solid var(--accent); }
 .error { color: var(--critical); }
 .error::before { content: "⚠ "; }
 .pager { margin-top: 8px; font-size: 12px; color: var(--text-secondary); }
+
+/* --- monitoring --------------------------------------------------------- */
+.state { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.state .dot { flex: none; }
+.dot.muted { background: var(--text-muted); }
+.state-icon { font-size: 11px; width: 12px; text-align: center; }
+tr.problem td { background: color-mix(in srgb, var(--critical) 7%, transparent); }
+.cell-sub { display: block; color: var(--text-secondary); font-size: 12px; }
+.minibar { display: inline-block; height: 8px; background: var(--series-1); border-radius: 0 4px 4px 0; vertical-align: middle; margin-right: 8px; min-width: 2px; }
+.events { margin-top: 10px; font-size: 13px; }
+.events summary { cursor: pointer; color: var(--text-secondary); }
+.events ol { list-style: none; margin: 8px 0 0; padding: 0; max-height: 220px; overflow: auto; }
+.events li { display: grid; grid-template-columns: 150px 1fr; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--grid); }
+.events time { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.own-list { display: grid; gap: 10px; }
+.own-item { border: 1px solid var(--grid); border-radius: 8px; padding: 8px 10px; }
+.own-item.problem { border-color: var(--critical); }
+.own-item .own-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.own-item .detail { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+.own-item .chips { margin-top: 6px; }
+.chip.bad { outline: 1px solid var(--critical); }
+.hint { color: var(--text-secondary); font-size: 13px; }
+.hint code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
