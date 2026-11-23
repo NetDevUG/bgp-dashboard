@@ -4,6 +4,7 @@
 [network]
 asn = 216333
 # Prefixes learned from directly connected customers
+# (216333:100:130 = "originated in AS216333", taken over from the old constants.py)
 customer_community = "216333:100:130"
 # Prefixes learned from *paid* transit providers
 transit_community = "216333:100:100"
@@ -42,7 +43,10 @@ unstable_min_changes = 3
 # Names shown for BGP communities
 [communities]
 "216333:100:100" = "Transit"
-"216333:100:130" = "Customers"
+"216333:100:120" = "Learned from peer"
+"216333:100:130" = "Originated in AS216333"
+"216333:105:1" = "Location Meppel, NL"
+"216333:105:2" = "Location Amsterdam, NL"
 "216333:101:13335" = "Cloudflare"
 "216333:101:6939" = "HE"
 "216333:101:16276" = "OVH"
