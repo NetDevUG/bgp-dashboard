@@ -1,0 +1,67 @@
+# BGP Dashboard configuration (replaces flask/app/constants.py)
+# Changes take effect after restarting the web container: docker compose restart web
+
+[network]
+asn = 216333
+# Prefixes learned from directly connected customers
+customer_community = "216333:100:130"
+# Prefixes learned from *paid* transit providers
+transit_community = "216333:100:100"
+# Community prefix (starts with) for prefixes learned from bilateral peers and exchanges
+peer_community_prefix = "216333:101:"
+
+[dashboard]
+# Seconds between the cheap counters (peers, table sizes, next hops)
+stats_interval = 60
+# Seconds between the expensive statistics (peer table, communities, CIDR, AS path)
+advanced_stats_interval = 300
+# Days of counter history kept for the trend graphs
+stats_history_days = 14
+top_peers = 5
+# Above this many downstream ASNs no name lookups are done
+large_query_threshold = 200
+# Timeout for a single DNS lookup (ASN names, reverse DNS) in seconds
+dns_timeout = 2.0
+
+[monitoring]
+# Own prefixes that must be visible in the BGP table. For each one the dashboard
+# checks that it is present, originated by the own AS (or locally, empty AS path)
+# and that no more specific prefix is announced by a different origin AS.
+# Example: own_prefixes = ["192.0.2.0/24", "2001:db8::/32"]
+own_prefixes = []
+# Further origin ASNs that may announce (parts of) the own prefixes,
+# e.g. customers with assigned space or a DDoS scrubbing provider.
+allowed_origins = []
+check_more_specifics = true
+# "Unstable prefixes": changes counted over this window
+unstable_window_hours = 24
+unstable_top = 20
+# Prefixes with at least this many changes in the window count as unstable (/metrics)
+unstable_min_changes = 3
+
+# Names shown for BGP communities
+[communities]
+"216333:100:100" = "Transit"
+"216333:100:130" = "Customers"
+"216333:101:13335" = "Cloudflare"
+"216333:101:6939" = "HE"
+"216333:101:16276" = "OVH"
+"216333:101:32934" = "Meta"
+"216333:101:15169" = "Google"
+"216333:101:24940" = "Hetzner"
+"216333:101:41441" = "Speed-IX"
+"216333:101:50673" = "Serverius"
+"216333:101:50917" = "BackboneDirectt"
+"216333:101:6777" = "AMS-IX"
+"216333:101:206221" = "ERAIX"
+"216333:101:56393" = "FrysIX"
+"216333:101:56584" = "INTERIX"
+"216333:101:49917" = "LSIX"
+"216333:101:47498" = "FogIXP"
+"216333:101:49453" = "GlobalLayer"
+"216333:101:6830" = "Liberty Global"
+"216333:101:50869" = "FreeIX"
+"216333:101:174" = "Cogent"
+"64496:0" = "Cymru-UTRS"
+"65333:888" = "Cymru-BOGONs"
+"65535:65281" = "No-Export"

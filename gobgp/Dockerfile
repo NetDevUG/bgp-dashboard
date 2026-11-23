@@ -1,26 +1,20 @@
-FROM ubuntu:24.04
+# --- Build GoBGP from source (works for amd64 and arm64) --------------------
+FROM golang:1.25-bookworm AS gobgp-build
+ARG GOBGP_VERSION=4.11.0
+ENV CGO_ENABLED=0 GOBIN=/out
+RUN go install -trimpath -ldflags="-s -w" \
+        github.com/osrg/gobgp/v4/cmd/gobgp@v${GOBGP_VERSION} \
+        github.com/osrg/gobgp/v4/cmd/gobgpd@v${GOBGP_VERSION}
 
-ARG DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && \
-    apt-get remove -y binutils && \
-    apt-get install -y \
-        python3 \
-        python3-pip \
-        python3-venv \
-        wget && \
-    rm -rf /var/lib/apt/lists/*
-COPY ./requirements.txt /tmp/requirements.txt
-RUN python3 -m venv venv && chmod +x venv
-RUN . venv/bin/activate && pip3 install -r /tmp/requirements.txt
-RUN wget https://github.com/osrg/gobgp/releases/download/v3.27.0/gobgp_3.27.0_linux_amd64.tar.gz && \
-    tar -xzvf gobgp_3.27.0_linux_amd64.tar.gz && \
-    mv gobgp /usr/local/bin/gobgp && \
-    mv gobgpd /usr/local/bin/gobgpd && \
-    rm gobgp_3.27.0_linux_amd64.tar.gz
-COPY ./gobgpd.conf /root/gobgp/gobgpd.conf
-COPY ./entrypoint.sh /root/gobgp/entrypoint.sh
-COPY ./startup.sh /root/gobgp/startup.sh
-RUN chmod +x /root/gobgp/entrypoint.sh && \
-    chmod +x /root/gobgp/startup.sh
-ENTRYPOINT ["/root/gobgp/entrypoint.sh"]
+# --- Runtime ------------------------------------------------------------------
+FROM python:3.13-slim
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+COPY --from=gobgp-build /out/gobgp /out/gobgpd /usr/local/bin/
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+COPY gobgp_to_mongo.py bgp_attributes.py neighbor_poller.py /app/
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY gobgpd.conf /etc/gobgp/gobgpd.conf
+RUN chmod +x /usr/local/bin/entrypoint.sh
+EXPOSE 179
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

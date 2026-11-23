@@ -5,44 +5,110 @@ A "realtime" web view of your BGP network
 
 - Who do I peer with?
 - How many routes do I receive from my peers?
-- Who do I use for tranist?
+- Who do I use for transit?
 - What AS path does a prefix take out of my network?
-- How many routes and autonomous systems do I see?
-- BGP Looking Glass (IPv4/IPv6/ASN)
+- How many routes and autonomous systems do I see, and how does that change over time?
+- BGP Looking Glass (IPv4/IPv6/hostname/ASN) incl. route history
+- Are all BGP sessions up? When did they flap and why?
+- Are my own prefixes visible, with the right origin AS – or is someone announcing (parts of) them?
+- Which prefixes are unstable (flapping, path changes)?
+- Prometheus metrics and ready-made alert rules
 
 
 How it works
 ---------
-> This is beta code.
-- BGP peering session using GoBGP
-- GoBGP pipes BGP information into MongoDB
-- Flask App queries MongoDB to build website and JSON API
+```
+ router ──BGP──▶ gobgp container ──────────────▶ mongodb ◀────── web container ──▶ browser
+                 gobgpd + gobgp_to_mongo.py                       FastAPI (uvicorn)
+```
 
-###### This project uses three Docker containers
-- GoBGP ([osrg/gobgp](https://hub.docker.com/r/osrg/gobgp/))
-- MongoDB ([mongo](https://hub.docker.com/_/mongo/))
-- Flask ([docker-flask](https://hub.docker.com/r/p0bailey/docker-flask/))
+###### gobgp (`./gobgp`)
+- `gobgpd` (GoBGP v4, built from source, amd64 + arm64) peers with the real network.
+  Configure it in [gobgp/gobgpd.conf](gobgp/gobgpd.conf). IPv4- and IPv6-unicast are supported.
+- `gobgp monitor global rib --current -j` is piped into [gobgp_to_mongo.py](gobgp/gobgp_to_mongo.py),
+  which writes the routes to MongoDB in batches (one `bulk_write` per batch, keeps up with a full table).
+- Every prefix is one document. When the attributes of a prefix change, the previous version is
+  kept in its `history` (newest first, `MAX_PREFIX_HISTORY` entries, default 100).
+- If `gobgpd` or the collector dies, the container exits and Docker restarts it. On start all
+  stored prefixes are marked inactive and the RIB is learned again.
+- Every 10s the collector also reads `gobgp neighbor -j` and stores the state of all BGP sessions
+  plus every state change (session events, kept 90 days) and a heartbeat.
 
-###### GoBGP
-The GoBGP container serves two functions:
-- Peer with the "real" network
-  - Configure [gobgpd.conf](https://github.com/rhicks/bgp-dash/blob/master/gobgp/gobgpd.conf) to peer with the real network.
-  - Only IPv4-Unicast and IPv6-Unicast supported at this time.
-- Pass BGP updates into BGP
-  - The [gobgp_to_mongo.py](https://github.com/rhicks/bgp-dash/blob/master/gobgp_to_mongo.py) script pipes the JSON updates from GoBGP into the MongoDB container
+###### mongodb
+- Stores the routes (`bgp`), cached ASN names (`asn_names`) and the counter history for the
+  trend graphs (`stats_history`, kept for `stats_history_days`), the BGP session state (`neighbors`,
+  `neighbor_events`) and the collector status (`collector_status`).
 
-###### MongoDB
-- Mongo receives JSON updates from the GoBGP container
-- The Flask App queries Mongo for relevant information
-
-###### Flask
-- Flask presents a Dashboard for realtime BGP updates
-- A JSON API is used on the backend to support the frontend and display Looking Glass queries
+###### web (`./web`)
+- One FastAPI process. A single background task computes all statistics with MongoDB
+  aggregation pipelines (every `stats_interval` / `advanced_stats_interval` seconds); requests
+  only read the cached result, so they are always fast – even while statistics are computed or
+  MongoDB restarts.
+- ASN names (Team Cymru DNS) and reverse DNS are cached (ASN names also in MongoDB).
+- The dashboard is a single page without any CDN dependencies; it refreshes itself every 20s,
+  keeps trend graphs across reloads, supports dark mode and has a built-in looking glass.
+- Interactive API documentation: `http://<host>/docs`, health check: `http://<host>/healthz`,
+  Prometheus metrics: `http://<host>/metrics`.
 
 
 Screenshot
 ---------
 ![screenshot](bgp-dashboard.png)
+
+Monitoring: BGP sessions with event log, own prefixes (here with a simulated hijack), unstable prefixes
+
+![monitoring](docs/monitoring.png)
+
+
+Monitoring
+---------
+###### BGP sessions
+The session table shows every neighbor configured in `gobgpd.conf` with state, up/down time,
+received/accepted prefixes and the last disconnect reason. *Drops* counts how often an established
+session was lost – also when it came back between two polls. All state changes are listed under
+*Session events*. The status in the top right corner turns red when a session is down
+(administratively disabled sessions are ignored).
+
+###### Own prefixes
+List your prefixes in `config/dashboard.toml`:
+```toml
+[monitoring]
+own_prefixes = ["192.0.2.0/24", "2001:db8::/32"]
+allowed_origins = [64500]   # optional: other ASNs allowed to originate them
+```
+Every minute each prefix is checked for
+- **Missing** – not in the BGP table (or withdrawn),
+- **Foreign origin** – originated by an AS other than your own (locally originated = empty AS path)
+  or one of `allowed_origins` → possible hijack or misconfiguration,
+- **Foreign more-specific** – a more specific prefix inside it is announced by a foreign origin AS
+  → possible (sub-prefix) hijack.
+
+The dashboard only sees what your router(s) send to GoBGP: this detects problems inside your view
+of the Internet, not how others see your prefixes (use RIPE RIS / BGP monitoring services for that).
+
+###### Unstable prefixes
+The collector records the time of every real route change (attribute change, withdraw,
+re-announce; not the re-learning after a restart). The dashboard lists the prefixes with the most
+changes in the last `unstable_window_hours` (default 24h) plus the total churn.
+
+###### Prometheus
+Scrape `http://<host>/metrics` (example in [monitoring/prometheus-scrape.yml](monitoring/prometheus-scrape.yml))
+and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.yml):
+
+| Alert | Fires when |
+|-------|------------|
+| `BGPSessionDown` | a session (not admin down) is not established for 2 min |
+| `BGPSessionFlapping` | ≥ 3 session drops within an hour |
+| `BGPSessionPrefixesDropped` | a session lost more than half of its accepted prefixes |
+| `BGPOwnPrefixMissing` / `…WrongOrigin` / `…ForeignMoreSpecific` | see *Own prefixes* |
+| `BGPTableSizeDrop` | the IPv4/IPv6 table shrank by more than 10 % within an hour |
+| `BGPHighRouteChurn` | unusually many route changes |
+| `BGPCollectorDown`, `BGPNeighborPollFailing`, `BGPDashboardStatsStale`, `BGPDashboardDown` | the dashboard itself has a problem |
+
+Test the rules with `promtool test rules monitoring/bgp-alerts.test.yml`.
+Main metrics: `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
+`bgp_own_prefix_ok`, `bgp_prefixes`, `bgp_peer_prefixes`, `bgp_route_changes`,
+`bgp_unstable_prefixes`, `bgp_collector_heartbeat_timestamp_seconds`.
 
 
 Install
@@ -51,13 +117,77 @@ Install
 $ git clone https://github.com/NetDevUG/bgp-dashboard.git
 $ cd bgp-dashboard
 $ # modify ./gobgp/gobgpd.conf to peer with your network
-$ # modify ./flask/app/constants.py globals to use your ASN and BGP communities
+$ # modify ./config/dashboard.toml to use your ASN and BGP communities
 $ docker compose build
-$ docker compose up (watch the log to verify BGP peeering is established)
+$ docker compose up -d
+$ docker compose logs -f gobgp            # verify the BGP session comes up
+$ docker compose exec gobgp gobgp neighbor
 ```
 
+Configuration changes never need a rebuild (`docker compose build` is only needed after code updates):
 
-Todo
+| File | Contents | Apply with |
+|------|----------|------------|
+| `gobgp/gobgpd.conf` | BGP sessions | automatically on save (GoBGP config auto-reload) |
+| `config/dashboard.toml` | own ASN, customer/transit/peer communities, community names, refresh intervals | `docker compose restart web` |
+
+Environment variables (see `docker-compose.yml`):
+
+| Variable | Default | |
+|----------|---------|-|
+| `WEB_PORT` | `80` | Port of the dashboard on the host |
+| `MONGO_VERSION` | `8` | MongoDB image tag |
+| `MONGO_CACHE_GB` | `1` | WiredTiger cache size |
+| `MAX_PREFIX_HISTORY` | `100` | Versions kept per prefix (`0` = unlimited) |
+| `NEIGHBOR_POLL_INTERVAL` | `10` | Seconds between BGP session polls (`0` = off) |
+| `NEIGHBOR_EVENT_DAYS` | `90` | Days session events are kept |
+| `GOBGP_CONFIG_AUTO_RELOAD` | `true` | Apply changes of `gobgpd.conf` without restart |
+| `GOBGP_VERSION` (build arg) | `4.11.0` | GoBGP release built into the image |
+
+
+Upgrading from the Flask version
 ---------
-- Update gobgp
-- Update Python Dependencys
+- `flask/app/constants.py` was replaced by `config/dashboard.toml` – copy your ASN, communities
+  and community names over.
+- `gobgp_to_mongo.py` and `bgp_attributes.py` moved to `./gobgp/`.
+- The MongoDB data in `./db` is reused; documents get updated on the fly. On its first start the
+  new collector adds two index fields to all stored prefixes (takes about a minute for a full table).
+- MongoDB is now pinned to the major version `8` instead of `latest`. If your data was written by
+  a newer major version, set `MONGO_VERSION` accordingly.
+- All API URLs (`/bgp/api/v1.0/...`) and their JSON fields stay the same. New:
+  `/bgp/api/v1.0/stats/history`, `community_names` in IP lookups, invalid lookups return HTTP 400.
+- The web container listens on port 8000 inside the container (nginx, uWSGI and supervisor are gone).
+
+
+API
+---------
+| Endpoint | |
+|----------|-|
+| `GET /bgp/api/v1.0/stats` | all dashboard statistics |
+| `GET /bgp/api/v1.0/stats/history?hours=24&points=300` | counter history for trend graphs |
+| `GET /bgp/api/v1.0/peers` / `customers` / `communities` | cached tables |
+| `GET /bgp/api/v1.0/ip/<ip or hostname>` | longest prefix match |
+| `GET /bgp/api/v1.0/ip/<ip>/history` | same, incl. previous versions of the route |
+| `GET /bgp/api/v1.0/asn/<asn>` | prefixes originated by an ASN |
+| `GET /bgp/api/v1.0/asn/<asn>/downstream` | ASNs directly behind a peer |
+| `GET /bgp/api/v1.0/asn/<asn>/originated[/ipv4\|ipv6]` | originated prefixes |
+| `GET /bgp/api/v1.0/asn/<asn>/nexthop[/ipv4\|ipv6]` | prefixes with that next-hop ASN |
+| `GET /bgp/api/v1.0/asn/<asn>/transit` | prefixes with the ASN anywhere in the AS path |
+| `GET /bgp/api/v1.0/domain/<domain>` | prefixes of the network hosting the domain's name server |
+| `GET /bgp/api/v1.0/neighbors` | BGP sessions with state, uptime, drops, prefixes |
+| `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
+| `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
+| `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /metrics` | Prometheus metrics |
+
+
+Development
+---------
+```
+$ docker run -d --rm -p 27017:27017 mongo:8          # tests use mongodb://localhost:27017
+$ python3 -m venv .venv && . .venv/bin/activate
+$ pip install -r web/requirements-dev.txt
+$ pytest
+$ cd web && MONGO_URI=mongodb://localhost:27017 uvicorn app.main:app --reload
+$ MONGO_URI=mongodb://localhost:27017 python gobgp/gobgp_to_mongo.py < log/sample_data.log
+```

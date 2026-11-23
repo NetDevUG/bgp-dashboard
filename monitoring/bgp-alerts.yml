@@ -1,0 +1,101 @@
+# Prometheus alerting rules for the BGP Dashboard (/metrics).
+# Load via rule_files in prometheus.yml; thresholds are examples, adjust as needed.
+groups:
+  - name: bgp-sessions
+    rules:
+      - alert: BGPSessionDown
+        expr: bgp_session_up == 0 and bgp_session_admin_down == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "BGP session {{ $labels.neighbor }} (AS{{ $labels.peer_asn }}) is down"
+          description: "{{ $labels.description }} has not been established for 2 minutes."
+
+      - alert: BGPSessionFlapping
+        expr: increase(bgp_session_drops_total[1h]) >= 3
+        labels: {severity: warning}
+        annotations:
+          summary: "BGP session {{ $labels.neighbor }} (AS{{ $labels.peer_asn }}) is flapping"
+          description: "{{ $value | printf \"%.0f\" }} session drops in the last hour."
+
+      - alert: BGPSessionPrefixesDropped
+        expr: >
+          bgp_session_prefixes_accepted
+          < 0.5 * max_over_time(bgp_session_prefixes_accepted[1h])
+          and bgp_session_up == 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.neighbor }} ({{ $labels.family }}) lost more than half of its prefixes"
+
+  - name: bgp-own-prefixes
+    rules:
+      - alert: BGPOwnPrefixMissing
+        expr: bgp_own_prefix_visible == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Own prefix {{ $labels.prefix }} is missing from the BGP table"
+
+      - alert: BGPOwnPrefixWrongOrigin
+        expr: bgp_own_prefix_origin_ok == 0 and bgp_own_prefix_visible == 1
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Own prefix {{ $labels.prefix }} is originated by a foreign AS (possible hijack)"
+
+      - alert: BGPOwnPrefixForeignMoreSpecific
+        expr: bgp_own_prefix_foreign_more_specifics > 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Foreign more specific of own prefix {{ $labels.prefix }} (possible hijack)"
+          description: "{{ $value }} more specific prefix(es) with a foreign origin AS – see the dashboard."
+
+  - name: bgp-table
+    rules:
+      - alert: BGPTableSizeDrop
+        expr: bgp_prefixes < 0.9 * max_over_time(bgp_prefixes[1h])
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "IPv{{ $labels.ip_version }} table shrank by more than 10% within an hour"
+
+      - alert: BGPHighRouteChurn
+        expr: >
+          bgp_route_changes{window="1h"} > 5000
+          and bgp_route_changes{window="1h"} > 3 * avg_over_time(bgp_route_changes{window="1h"}[1d])
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Unusually many route changes: {{ $value }} in the last hour"
+
+  - name: bgp-dashboard
+    rules:
+      - alert: BGPDashboardDown
+        expr: up{job="bgp-dashboard"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "BGP Dashboard /metrics is not reachable"
+
+      - alert: BGPCollectorDown
+        expr: time() - bgp_collector_heartbeat_timestamp_seconds > 120
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "BGP collector has not reported for {{ $value | humanizeDuration }}"
+
+      - alert: BGPNeighborPollFailing
+        expr: bgp_neighbor_poll_error == 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Collector cannot read the BGP session state from gobgpd"
+
+      - alert: BGPDashboardStatsStale
+        expr: time() - bgp_stats_last_update_timestamp_seconds{kind="basic"} > 300 or bgp_stats_error == 1
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Dashboard statistics are not being refreshed"
