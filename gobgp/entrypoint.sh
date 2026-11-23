@@ -5,8 +5,14 @@ set -euo pipefail
 
 CONF="${GOBGPD_CONF:-/etc/gobgp/gobgpd.conf}"
 MONITOR_ARGS="${GOBGP_MONITOR_ARGS:---current}"
+RELOAD_OPT=""
+# Apply changes of gobgpd.conf automatically (no restart, other sessions keep running)
+if [ "${GOBGP_CONFIG_AUTO_RELOAD:-true}" = "true" ]; then
+    RELOAD_OPT="--config-auto-reload"
+fi
 
-gobgpd -f "$CONF" ${GOBGPD_OPTS:-} &
+# shellcheck disable=SC2086
+gobgpd -f "$CONF" $RELOAD_OPT ${GOBGPD_OPTS:-} &
 GOBGPD_PID=$!
 trap 'kill "$GOBGPD_PID" 2>/dev/null || true' EXIT
 

@@ -124,11 +124,11 @@ $ docker compose logs -f gobgp            # verify the BGP session comes up
 $ docker compose exec gobgp gobgp neighbor
 ```
 
-Configuration changes do not need a rebuild:
+Configuration changes never need a rebuild (`docker compose build` is only needed after code updates):
 
 | File | Contents | Apply with |
 |------|----------|------------|
-| `gobgp/gobgpd.conf` | BGP sessions | `docker compose restart gobgp` |
+| `gobgp/gobgpd.conf` | BGP sessions | automatically on save (GoBGP config auto-reload) |
 | `config/dashboard.toml` | own ASN, customer/transit/peer communities, community names, refresh intervals | `docker compose restart web` |
 
 Environment variables (see `docker-compose.yml`):
@@ -141,6 +141,7 @@ Environment variables (see `docker-compose.yml`):
 | `MAX_PREFIX_HISTORY` | `100` | Versions kept per prefix (`0` = unlimited) |
 | `NEIGHBOR_POLL_INTERVAL` | `10` | Seconds between BGP session polls (`0` = off) |
 | `NEIGHBOR_EVENT_DAYS` | `90` | Days session events are kept |
+| `GOBGP_CONFIG_AUTO_RELOAD` | `true` | Apply changes of `gobgpd.conf` without restart |
 | `GOBGP_VERSION` (build arg) | `4.11.0` | GoBGP release built into the image |
 
 
