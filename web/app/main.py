@@ -23,6 +23,7 @@ from .lookups import InvalidQuery, Lookups
 from . import monitoring
 from .metrics import render_metrics
 from .akvorado import AkvoradoService
+from .peeringdb import PeeringDBService
 from .rpki import RpkiService
 from .stats import StatsService
 
@@ -53,6 +54,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.client, app.state.db = client, db
         app.state.dns, app.state.stats, app.state.rpki = dns, stats, rpki
         app.state.akvorado = akvorado
+        peeringdb = PeeringDBService(db, settings, dns, akvorado=akvorado)
+        app.state.peeringdb = peeringdb
         app.state.lookups = Lookups(db, settings, dns, rpki=rpki)
 
         tasks = []
@@ -65,6 +68,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if akvorado.enabled:
                 tasks.append(asyncio.create_task(akvorado.run(), name="akvorado-refresh"))
             tasks.append(asyncio.create_task(stats.run(), name="stats-refresh"))
+            if peeringdb.enabled:
+                tasks.append(asyncio.create_task(peeringdb.run(stats), name="peeringdb-refresh"))
         try:
             yield
         finally:
@@ -127,6 +132,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "exitsConfigured": bool(settings.location_community_prefix or settings.peer_learned_community),
                 "rpkiEnabled": bool(settings.rpki_vrp_url),
                 "akvoradoEnabled": bool(settings.akvorado_clickhouse_url),
+                "peeringdbEnabled": settings.peeringdb_enabled,
             },
         })
 
@@ -207,6 +213,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """RPKI route origin validation of all active routes (Routinator VRPs)."""
         return request.app.state.rpki.data
 
+    @app.get(f"{API}/peering-suggestions", tags=["monitoring"])
+    async def get_peering_suggestions(request: Request):
+        """Networks behind your transits that share an internet exchange with you (PeeringDB)."""
+        return request.app.state.peeringdb.data
+
     @app.get(f"{API}/akvorado", tags=["monitoring"])
     async def get_akvorado(request: Request):
         """Status of the Akvorado traffic data (top destination ASNs by outgoing traffic)."""
@@ -228,6 +239,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             extra = [("bgp_akvorado_ok", akv.data["ok"], None, "1 if the last Akvorado query succeeded"),
                      ("bgp_akvorado_outgoing_bps", float(akv.data["total_bps"]), None,
                       "Average outgoing external traffic in the Akvorado window")]
+        pdb = request.app.state.peeringdb
+        if pdb.enabled:
+            extra += [("bgp_peeringdb_ok", pdb.data["ok"], None, "1 if the last PeeringDB refresh succeeded"),
+                      ("bgp_peering_suggestions", len(pdb.data["suggestions"]), None,
+                       "Networks behind the transits that share an internet exchange with you")]
         text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector,
                               rpki=request.app.state.rpki.data, extra=extra)
         return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")

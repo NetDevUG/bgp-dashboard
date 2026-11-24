@@ -71,6 +71,15 @@ database = "default"
 table = "flows_5m0s"
 window_hours = 24
 
+[peeringdb]
+# Peering suggestions: networks directly behind your transit providers that are present at
+# one of your internet exchanges (needs HTTPS access to www.peeringdb.com from the dashboard).
+# Optional API key for a higher rate limit: PEERINGDB_API_KEY in .env
+enabled = true
+refresh_hours = 12
+# how many networks behind the transits are checked (by traffic with Akvorado, else prefixes)
+candidates = 50
+
 # Names shown for BGP communities
 [communities]
 "216333:100:100" = "Transit"

@@ -584,6 +584,40 @@
       tipBox ? el("div", { style: "margin-top:16px" }, tipBox) : null);
   }
 
+  // ------------------------------------------------------------------ peering suggestions
+  async function refreshPeering() {
+    if (!CONFIG.peeringdbEnabled) return;
+    $("#peeringCard").hidden = false;
+    let d;
+    try { d = await getJSON(`${API}/peering-suggestions`); } catch (e) { return; }
+    const box = $("#peering");
+    $("#peeringUpdated").textContent = d.updated ? `updated ${timeAgo(d.updated)}` : "";
+    if (!d.updated) {
+      fill(box, el("div", { class: d.error ? "error" : "muted", text: d.error ? `PeeringDB not reachable: ${d.error}` : "Waiting for the first PeeringDB query (runs after the table is learned)…" }));
+      return;
+    }
+    const byTraffic = d.ranked_by === "traffic";
+    fill(box,
+      d.error ? el("div", { class: "error", text: `Last refresh failed (showing previous result): ${d.error}` }) : null,
+      el("p", { class: "explain", text:
+        `Checked the top ${d.candidates_checked} networks directly behind your transit providers (${byTraffic ? "by outgoing traffic, Akvorado" : "by prefixes reached via transit"}). ` +
+        `${d.suggestions.length} share an exchange with you, ${d.no_common_ix} do not, ${d.not_in_peeringdb} are not in PeeringDB. ` +
+        `Your exchanges: ${d.own_ixes.map((ix) => ix.name).join(", ") || "none found for AS" + CONFIG.asn}.` }),
+      d.suggestions.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+        el("thead", {}, el("tr", {}, ...["Network", byTraffic ? "Traffic" : null, "Prefixes via transit", "Policy", "Common exchanges", ""]
+          .filter((h) => h !== null).map((h) => el("th", { class: /Traffic|Prefixes/.test(h) ? "num" : null, text: h })))),
+        el("tbody", {}, ...d.suggestions.map((sg) => el("tr", {},
+          el("td", {}, asLink(sg.asn), el("span", { class: "cell-sub", text: [sg.name, sg.type].filter(Boolean).join(" · ") })),
+          byTraffic ? el("td", { class: "num", text: fmtBps(sg.traffic_bps) }) : null,
+          el("td", { class: "num" }, el("a", { href: `#list=${sg.asn}/transit`, text: fmt(sg.prefixes_via_transit) })),
+          el("td", { text: sg.policy || "–" }),
+          el("td", {}, el("div", { class: "chips" }, ...sg.common_ixes.map((ix) =>
+            el("span", { class: "chip", title: ix.route_server ? "peers with the route server" : "no route server session" },
+              ix.name || `IX ${ix.ix_id}`, ix.route_server ? el("small", { text: "RS" }) : null)))),
+          el("td", {}, el("a", { href: sg.peeringdb_url, target: "_blank", rel: "noopener", text: "PeeringDB" })))))))
+        : el("div", { class: "muted small", text: "No network behind your transits is present at one of your exchanges." }));
+  }
+
   // ------------------------------------------------------------------ rpki
   async function refreshRpki() {
     if (!CONFIG.rpkiEnabled) return;
@@ -666,6 +700,7 @@
     renderUnstable(s);
     renderExits(s);
     refreshRpki();
+    refreshPeering();
   }
 
   async function refresh() {

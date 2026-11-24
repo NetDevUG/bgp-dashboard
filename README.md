@@ -127,6 +127,19 @@ User and password go into `.env` (`AKVORADO_CLICKHOUSE_USER`, `AKVORADO_CLICKHOU
 with `SELECT` on the Akvorado database is enough. The ClickHouse port of the Akvorado compose setup
 has to be reachable from the dashboard host.
 
+###### Peering opportunities (PeeringDB)
+The networks directly behind your transit providers (second AS of the transit routes) that are not
+direct peers yet are checked in PeeringDB every 12 hours: the card lists those that are present at
+one of your internet exchanges, with their peering policy, whether they use the route server and
+how many prefixes (with Akvorado: how much traffic) you currently reach via transit through them.
+```toml
+[peeringdb]
+enabled = true
+candidates = 50      # networks checked, ranked by traffic (Akvorado) or prefixes
+```
+Needs HTTPS access to `www.peeringdb.com`; an API key (`PEERINGDB_API_KEY` in `.env`) raises the
+rate limit but is not required. Results are cached in MongoDB.
+
 ###### RPKI
 With an RPKI validator (Routinator, rpki-client) every active route is validated (RFC 6811) every
 15 minutes: totals of valid / invalid / not-found routes, a list of all invalid routes with the
@@ -232,6 +245,7 @@ API
 | `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
 | `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
 | `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /bgp/api/v1.0/peering-suggestions` | networks behind your transits at your exchanges |
 | `GET /bgp/api/v1.0/akvorado` | status of the Akvorado traffic data, top destination ASNs |
 | `GET /bgp/api/v1.0/rpki` | RPKI validation summary and invalid routes |
 | `GET /bgp/api/v1.0/exits` | exits by location and type, peers by location, transit although peered |
