@@ -75,3 +75,21 @@ tests:
             exp_annotations:
               summary: "Own prefix 192.0.2.0/24 is not RPKI valid (ROA missing or not matching)"
               description: "Networks doing route origin validation may drop or depreference it."
+
+  - interval: 1m
+    input_series:
+      - series: 'bgp_external_foreign_origins{prefix="192.0.2.0/24"}'
+        values: '0 0 1 1 1 1'
+      - series: 'bgp_external_visibility_ratio{prefix="192.0.2.0/24"}'
+        values: '0.95x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: BGPExternalForeignOrigin
+        exp_alerts:
+          - exp_labels: {severity: critical, prefix: 192.0.2.0/24}
+            exp_annotations:
+              summary: "Own prefix 192.0.2.0/24 (or a more specific) is announced by a foreign AS on the Internet"
+              description: "Seen by the RIPE RIS route collectors – possible hijack, see the dashboard (External view)."
+      - eval_time: 40m
+        alertname: BGPExternalVisibilityLow
+        exp_alerts: []

@@ -52,6 +52,30 @@ groups:
           summary: "Foreign more specific of own prefix {{ $labels.prefix }} (possible hijack)"
           description: "{{ $value }} more specific prefix(es) with a foreign origin AS – see the dashboard."
 
+  - name: bgp-external
+    rules:
+      - alert: BGPExternalForeignOrigin
+        expr: bgp_external_foreign_origins > 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Own prefix {{ $labels.prefix }} (or a more specific) is announced by a foreign AS on the Internet"
+          description: "Seen by the RIPE RIS route collectors – possible hijack, see the dashboard (External view)."
+
+      - alert: BGPExternalVisibilityLow
+        expr: bgp_external_visibility_ratio < 0.8
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Own prefix {{ $labels.prefix }} is seen by only {{ $value | humanizePercentage }} of the RIS peers"
+
+      - alert: BGPRISLiveDisconnected
+        expr: bgp_ris_live_connected == 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "No connection to RIPE RIS Live – external hijack detection is blind"
+
   - name: bgp-rpki
     rules:
       - alert: BGPOwnPrefixRPKINotValid

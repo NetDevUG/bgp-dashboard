@@ -584,6 +584,47 @@
       tipBox ? el("div", { style: "margin-top:16px" }, tipBox) : null);
   }
 
+  // ------------------------------------------------------------------ external view (RIPE RIS)
+  let externalProblems = 0;
+  async function refreshExternal() {
+    if (!CONFIG.risEnabled) return;
+    $("#externalCard").hidden = false;
+    let d, events = [];
+    try {
+      d = await getJSON(`${API}/external`);
+      events = await getJSON(`${API}/external/events?hours=168&limit=50`);
+    } catch (e) { return; }
+    $("#externalStatus").replaceChildren(stateBadge(d.connected ? "ok" : "warn",
+      d.connected ? `RIS Live connected${d.last_message ? ", last update " + timeAgo(d.last_message) : ""}` : `RIS Live disconnected${d.error ? ": " + d.error : ""}`));
+    externalProblems = d.prefixes.filter((p) => (p.foreign || []).length || ((p.visibility || {}).foreign_origins || []).length).length;
+    const rows = d.prefixes.map((p) => {
+      const vis = p.visibility || {};
+      const foreignOrigins = new Set([...(p.foreign || []).map((f) => f.origin_asn), ...(vis.foreign_origins || [])]);
+      const bad = foreignOrigins.size > 0;
+      const low = vis.ratio !== null && vis.ratio !== undefined && vis.ratio < 0.8;
+      return el("div", { class: "own-item" + (bad ? " problem" : "") },
+        el("div", { class: "own-head" }, lookupLink(p.prefix, p.prefix.split("/")[0]),
+          stateBadge(bad ? "err" : low ? "warn" : "ok", bad ? "Foreign origin seen" : low ? "Low visibility" : "OK")),
+        el("div", { class: "detail" },
+          vis.ris_peers_seeing !== undefined && vis.ris_peers_seeing !== null
+            ? `Seen by ${fmt(vis.ris_peers_seeing)} of ${fmt(vis.total_ris_peers)} RIS peers (${Math.round((vis.ratio || 0) * 100)}%)`
+            : "Visibility: waiting for RIPEstat",
+          vis.origins && vis.origins.length ? ` · origins ${vis.origins.map((o) => "AS" + o).join(", ")}` : ""),
+        (p.foreign || []).length ? el("div", { class: "chips" }, ...p.foreign.map((f) =>
+          el("a", { class: "chip bad", href: `#lookup=AS${f.origin_asn}`, title: `path ${f.path.flat().join(" ")}` },
+            `${f.prefix} by AS${f.origin_asn}`, el("small", { text: `${f.peers} RIS peers` })))) : null);
+    });
+    fill($("#external"),
+      el("div", { class: "own-list" }, ...rows),
+      el("details", { class: "events" }, el("summary", { text: `Foreign announcements (last 7 days): ${events.filter((e) => e.type === "foreign_announcement").length}` }),
+        events.length ? el("ol", {}, ...events.map((e) => el("li", {},
+          el("time", { datetime: e.ts, text: shortTime(e.ts) }),
+          el("span", {}, stateBadge(e.type === "foreign_announcement" ? "err" : "ok",
+            `${e.prefix} by AS${e.origin_asn} ${e.type === "foreign_announcement" ? "announced" : "gone"}`),
+            el("span", { class: "cell-sub", text: (e.more_specific ? "more specific of " : "own prefix ") + e.own_prefix + (e.path ? ` · path ${e.path.flat().join(" ")}` : "") })))))
+          : el("div", { class: "muted small", text: "None." })));
+  }
+
   // ------------------------------------------------------------------ peering suggestions
   async function refreshPeering() {
     if (!CONFIG.peeringdbEnabled) return;
@@ -718,9 +759,11 @@
         renderAdvanced(s);
       }
       await refreshSessions();
+      refreshExternal();
       const age = s.basic_updated ? (Date.now() - new Date(s.basic_updated).getTime()) / 1000 : Infinity;
       const problems = [];
       if (sessions && sessions.summary.down) problems.push(`${sessions.summary.down} session${sessions.summary.down > 1 ? "s" : ""} down`);
+      if (externalProblems) problems.push(`${externalProblems} prefix${externalProblems > 1 ? "es" : ""} with foreign origin (RIS)`);
       if (s.own_prefix_problems) problems.push(`${s.own_prefix_problems} own prefix problem${s.own_prefix_problems > 1 ? "s" : ""}`);
       if (!s.ready) setStatus("warn", "Computing statistics…");
       else if (problems.length) setStatus("err", problems.join(" · "));

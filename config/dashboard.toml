@@ -80,6 +80,15 @@ refresh_hours = 12
 # how many networks behind the transits are checked (by traffic with Akvorado, else prefixes)
 candidates = 50
 
+[ris_live]
+# External view: watch the own prefixes ([monitoring] own_prefixes) and their more specifics
+# with RIPE RIS Live (WebSocket to ris-live.ripe.net) and RIPEstat (stat.ripe.net).
+# Foreign origins anywhere on the Internet are reported (possible hijack).
+# Needs own_prefixes and HTTPS / WSS access to the RIPE NCC from the dashboard.
+enabled = true
+# days the foreign announcement events are kept
+event_days = 30
+
 # Names shown for BGP communities
 [communities]
 "216333:100:100" = "Transit"

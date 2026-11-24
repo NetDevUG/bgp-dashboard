@@ -113,6 +113,18 @@ originated_community = "216333:100:130"
 Only the best path per prefix is known: RouterOS sends only active paths, also with BGP
 Add-Path, so backup paths are not visible.
 
+###### External view (RIPE RIS)
+The own-prefix check above only sees what your routers learn. With `[ris_live] enabled = true` the
+dashboard also watches your `own_prefixes` and all their more specifics as seen by the RIPE RIS route
+collectors (hundreds of BGP sessions worldwide):
+- **RIS Live** (WebSocket, real time): an announcement with an origin AS other than yours (or one in
+  `allowed_origins`) is reported immediately and stored as event, including when it disappears again.
+- **RIPEstat routing-status** (every 15 minutes): how many RIS peers see your prefix and which origins
+  it currently has.
+
+Alerts: `BGPExternalForeignOrigin` (possible hijack), `BGPExternalVisibilityLow`,
+`BGPRISLiveDisconnected`. Needs outgoing HTTPS/WSS access to `ris-live.ripe.net` and `stat.ripe.net`.
+
 ###### Akvorado (optional)
 If you run [Akvorado](https://github.com/akvorado/akvorado), the dashboard reads the outgoing
 traffic per destination AS (flows leaving through external interfaces, last 24 h) from its
@@ -163,13 +175,14 @@ and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.
 | `BGPSessionFlapping` | ≥ 3 session drops within an hour |
 | `BGPSessionPrefixesDropped` | a session lost more than half of its accepted prefixes |
 | `BGPOwnPrefixMissing` / `…WrongOrigin` / `…ForeignMoreSpecific` | see *Own prefixes* |
+| `BGPExternalForeignOrigin`, `BGPExternalVisibilityLow`, `BGPRISLiveDisconnected` | own prefix announced by a foreign AS somewhere on the Internet, low global visibility, RIS Live not connected |
 | `BGPOwnPrefixRPKINotValid`, `BGPRPKIDataStale` | own prefix without matching ROA, validator not reachable |
 | `BGPTableSizeDrop` | the IPv4/IPv6 table shrank by more than 10 % within an hour |
 | `BGPHighRouteChurn` | unusually many route changes |
 | `BGPCollectorDown`, `BGPNeighborPollFailing`, `BGPDashboardStatsStale`, `BGPDashboardDown` | the dashboard itself has a problem |
 
 Test the rules with `promtool test rules monitoring/bgp-alerts.test.yml`.
-Main metrics: `bgp_rpki_routes`, `bgp_own_prefix_rpki_valid`, `bgp_exit_prefixes`, `bgp_transit_instead_of_peering_prefixes`, `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
+Main metrics: `bgp_external_foreign_origins`, `bgp_external_visibility_ratio`, `bgp_rpki_routes`, `bgp_own_prefix_rpki_valid`, `bgp_exit_prefixes`, `bgp_transit_instead_of_peering_prefixes`, `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
 `bgp_own_prefix_ok`, `bgp_prefixes`, `bgp_peer_prefixes`, `bgp_route_changes`,
 `bgp_unstable_prefixes`, `bgp_collector_heartbeat_timestamp_seconds`.
 
@@ -245,6 +258,7 @@ API
 | `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
 | `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
 | `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /bgp/api/v1.0/external` / `external/events` | own prefixes as seen by RIPE RIS, foreign announcements |
 | `GET /bgp/api/v1.0/peering-suggestions` | networks behind your transits at your exchanges |
 | `GET /bgp/api/v1.0/akvorado` | status of the Akvorado traffic data, top destination ASNs |
 | `GET /bgp/api/v1.0/rpki` | RPKI validation summary and invalid routes |

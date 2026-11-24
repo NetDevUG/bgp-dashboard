@@ -24,6 +24,7 @@ from . import monitoring
 from .metrics import render_metrics
 from .akvorado import AkvoradoService
 from .peeringdb import PeeringDBService
+from .ris import RisLiveService
 from .rpki import RpkiService
 from .stats import StatsService
 
@@ -56,6 +57,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.akvorado = akvorado
         peeringdb = PeeringDBService(db, settings, dns, akvorado=akvorado)
         app.state.peeringdb = peeringdb
+        ris = RisLiveService(db, settings)
+        app.state.ris = ris
         app.state.lookups = Lookups(db, settings, dns, rpki=rpki)
 
         tasks = []
@@ -68,6 +71,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if akvorado.enabled:
                 tasks.append(asyncio.create_task(akvorado.run(), name="akvorado-refresh"))
             tasks.append(asyncio.create_task(stats.run(), name="stats-refresh"))
+            if ris.enabled:
+                tasks.append(asyncio.create_task(ris.run(), name="ris-live"))
             if peeringdb.enabled:
                 tasks.append(asyncio.create_task(peeringdb.run(stats), name="peeringdb-refresh"))
         try:
@@ -133,6 +138,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "rpkiEnabled": bool(settings.rpki_vrp_url),
                 "akvoradoEnabled": bool(settings.akvorado_clickhouse_url),
                 "peeringdbEnabled": settings.peeringdb_enabled,
+                "risEnabled": settings.ris_live_enabled and bool(settings.own_prefixes),
             },
         })
 
@@ -213,6 +219,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """RPKI route origin validation of all active routes (Routinator VRPs)."""
         return request.app.state.rpki.data
 
+    @app.get(f"{API}/external", tags=["monitoring"])
+    async def get_external(request: Request):
+        """Own prefixes as seen by the RIPE RIS route collectors (RIS Live + RIPEstat)."""
+        return request.app.state.ris.summary()
+
+    @app.get(f"{API}/external/events", tags=["monitoring"])
+    async def get_external_events(request: Request, hours: float = Query(168, gt=0, le=24 * 366),
+                                  limit: int = Query(200, ge=1, le=5000)):
+        """Foreign announcements of the own prefixes seen by RIS Live (start and end)."""
+        return await request.app.state.ris.events(hours, limit)
+
     @app.get(f"{API}/peering-suggestions", tags=["monitoring"])
     async def get_peering_suggestions(request: Request):
         """Networks behind your transits that share an internet exchange with you (PeeringDB)."""
@@ -244,6 +261,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             extra += [("bgp_peeringdb_ok", pdb.data["ok"], None, "1 if the last PeeringDB refresh succeeded"),
                       ("bgp_peering_suggestions", len(pdb.data["suggestions"]), None,
                        "Networks behind the transits that share an internet exchange with you")]
+        ris = request.app.state.ris
+        if ris.enabled:
+            summary = ris.summary()
+            extra.append(("bgp_ris_live_connected", summary["connected"], None,
+                          "1 if the RIS Live WebSocket is connected"))
+            if ris.last_message:
+                extra.append(("bgp_ris_live_last_message_timestamp_seconds", ris.last_message.timestamp(),
+                              None, "Time of the last RIS Live update for the own prefixes"))
+            for p in summary["prefixes"]:
+                vis = p["visibility"] or {}
+                foreign = {f["origin_asn"] for f in p["foreign"]} | set(vis.get("foreign_origins") or [])
+                extra.append(("bgp_external_foreign_origins", len(foreign), {"prefix": p["prefix"]},
+                              "Foreign origin ASNs announcing the own prefix or a more specific (RIPE RIS)"))
+                if vis.get("ratio") is not None:
+                    extra.append(("bgp_external_visibility_ratio", float(vis["ratio"]), {"prefix": p["prefix"]},
+                                  "Share of RIS peers that see the own prefix (RIPEstat)"))
         text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector,
                               rpki=request.app.state.rpki.data, extra=extra)
         return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
