@@ -22,6 +22,7 @@ from .dns_cache import DnsCache
 from .lookups import InvalidQuery, Lookups
 from . import monitoring
 from .metrics import render_metrics
+from .rpki import RpkiService
 from .stats import StatsService
 
 log = logging.getLogger("bgp_dashboard")
@@ -45,22 +46,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                   serverSelectionTimeoutMS=5000, appname="bgp-dashboard")
         db = client[settings.mongo_db]
         dns = DnsCache(db, timeout=settings.dns_timeout)
-        stats = StatsService(db, settings, dns)
+        rpki = RpkiService(settings, dns)
+        stats = StatsService(db, settings, dns, rpki=rpki)
         app.state.client, app.state.db = client, db
-        app.state.dns, app.state.stats = dns, stats
-        app.state.lookups = Lookups(db, settings, dns)
+        app.state.dns, app.state.stats, app.state.rpki = dns, stats, rpki
+        app.state.lookups = Lookups(db, settings, dns, rpki=rpki)
 
-        task = None
+        tasks = []
         if settings.background_jobs:
             with contextlib.suppress(Exception):
                 await dns.ensure_indexes()
                 await stats.ensure_indexes()
-            task = asyncio.create_task(stats.run(), name="stats-refresh")
+            if rpki.enabled:
+                tasks.append(asyncio.create_task(rpki.run(), name="rpki-refresh"))
+            tasks.append(asyncio.create_task(stats.run(), name="stats-refresh"))
         try:
             yield
         finally:
-            if task:
+            for task in tasks:
                 task.cancel()
+            for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             await client.close()
@@ -115,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "historyDays": settings.stats_history_days,
                 "ownPrefixesConfigured": len(settings.own_prefixes),
                 "exitsConfigured": bool(settings.location_community_prefix or settings.peer_learned_community),
+                "rpkiEnabled": bool(settings.rpki_vrp_url),
             },
         })
 
@@ -190,6 +196,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Where (location) and how (transit / peering / own) prefixes leave the network."""
         return st(request).data["exits"]
 
+    @app.get(f"{API}/rpki", tags=["monitoring"])
+    async def get_rpki(request: Request):
+        """RPKI route origin validation of all active routes (Routinator VRPs)."""
+        return request.app.state.rpki.data
+
     @app.get("/metrics", response_class=PlainTextResponse, tags=["monitoring"])
     async def metrics(request: Request):
         """Prometheus metrics."""
@@ -200,7 +211,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             collector = await monitoring.collector_status(db)
         except Exception:  # noqa: BLE001 - still export the cached statistics
             sessions, collector = {}, {}
-        text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector)
+        text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector,
+                              rpki=request.app.state.rpki.data)
         return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # ------------------------------------------------------------------ #

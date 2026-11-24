@@ -419,8 +419,18 @@
 
   const PROBLEM_LABELS = {
     missing: "Missing", wrong_origin: "Foreign origin", foreign_more_specific: "Foreign more-specific",
-    invalid_config: "Invalid config",
+    invalid_config: "Invalid config", rpki_invalid: "RPKI invalid", rpki_not_found: "No ROA",
   };
+  const RPKI_LABELS = { valid: "RPKI valid", invalid: "RPKI invalid", "not-found": "No ROA (not found)" };
+  const RPKI_LEVEL = { valid: "ok", invalid: "err", "not-found": "muted" };
+  const RPKI_REASON = { as: "origin AS not authorised", length: "more specific than the ROA allows" };
+  function rpkiBadge(r) {
+    if (!r) return null;
+    const text = RPKI_LABELS[r.state] + (r.reason ? ` – ${RPKI_REASON[r.reason] || r.reason}` : "");
+    return stateBadge(RPKI_LEVEL[r.state] || "muted", text);
+  }
+  const vrpChips = (vrps) => el("div", { class: "chips" }, ...(vrps || []).map((v) =>
+    el("span", { class: "chip" }, `${v.prefix} max /${v.max_length}`, el("small", { text: `AS${v.asn}` }))));
   function renderOwnPrefixes(s) {
     const box = $("#ownPrefixes");
     if (!CONFIG.ownPrefixesConfigured) {
@@ -445,6 +455,7 @@
       return el("div", { class: "own-item" + (p.ok ? "" : " problem") },
         el("div", { class: "own-head" }, lookupLink(p.prefix, p.prefix.split("/")[0]), stateBadge(p.ok ? "ok" : "err", label)),
         detail,
+        p.rpki ? el("div", { class: "detail" }, rpkiBadge(p.rpki)) : null,
         p.more_specifics.length ? el("div", { class: "chips" }, ...p.more_specifics.slice(0, 30).map((m) =>
           el("a", { class: "chip" + (m.allowed ? "" : " bad"), href: `#lookup=${encodeURIComponent(m.prefix.split("/")[0])}`,
             title: m.allowed ? "allowed origin" : "foreign origin" }, m.prefix, el("small", { text: m.origin_asn === null ? "local" : `AS${m.origin_asn}` })))) : null,
@@ -563,6 +574,48 @@
       tipBox ? el("div", { style: "margin-top:16px" }, tipBox) : null);
   }
 
+  // ------------------------------------------------------------------ rpki
+  async function refreshRpki() {
+    if (!CONFIG.rpkiEnabled) return;
+    $("#rpkiCard").hidden = false;
+    let d;
+    try { d = await getJSON(`${API}/rpki`); } catch (e) { return; }
+    const box = $("#rpki");
+    $("#rpkiUpdated").textContent = d.updated ? `validated ${timeAgo(d.updated)} · ${fmt(d.vrps)} VRPs` : "";
+    if (!d.counts) {
+      fill(box, el("div", { class: d.error ? "error" : "muted", text: d.error ? `Routinator not reachable: ${d.error}` : "Loading VRPs…" }));
+      return;
+    }
+    const total = (s) => d.counts[s]["4"] + d.counts[s]["6"];
+    const all = Math.max(1, total("valid") + total("invalid") + total("not-found"));
+    const parts = [
+      { key: "valid", color: "var(--good)" }, { key: "invalid", color: "var(--critical)" },
+      { key: "not-found", color: "var(--text-muted)" }];
+    const bar = el("div", { class: "share", role: "img", "aria-label": parts.map((p) => `${RPKI_LABELS[p.key]}: ${fmt(total(p.key))}`).join(", ") },
+      ...parts.filter((p) => total(p.key)).map((p) => {
+        const pct = (total(p.key) / all) * 100;
+        return el("div", { class: "part", style: `width:${pct}%;background:${p.color}` }, pct >= 8 ? `${Math.round(pct)}%` : "");
+      }));
+    fill(box,
+      d.error ? el("div", { class: "error", text: `Last refresh failed (showing previous result): ${d.error}` }) : null,
+      el("div", { class: "rpki-summary" }, ...parts.map((p) => el("div", {},
+        stateBadge(RPKI_LEVEL[p.key], RPKI_LABELS[p.key]),
+        el("div", { class: "value", text: fmt(total(p.key)) }),
+        el("div", { class: "muted small", text: `IPv4 ${fmt(d.counts[p.key]["4"])} · IPv6 ${fmt(d.counts[p.key]["6"])}` })))),
+      bar,
+      el("h3", { text: `Invalid routes (${fmt(d.invalid_total)})`, style: "font-size:13px;margin:14px 0 6px;color:var(--text-secondary)" }),
+      d.invalid.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+        el("thead", {}, el("tr", {}, ...["Prefix", "Origin AS", "Reason", "Next-hop AS", "Covering ROAs"].map((h) => el("th", { text: h })))),
+        el("tbody", {}, ...d.invalid.map((i) => el("tr", {},
+          el("td", {}, lookupLink(i.prefix, i.prefix.split("/")[0])),
+          el("td", {}, asLink(i.origin_asn), i.origin_name && i.origin_name !== "(DNS Error)" ? el("span", { class: "cell-sub", text: i.origin_name }) : null),
+          el("td", { class: "small", text: RPKI_REASON[i.reason] || i.reason }),
+          el("td", { class: "num" }, i.nexthop_asn === null || i.nexthop_asn === undefined ? "–" : asLink(i.nexthop_asn)),
+          el("td", {}, vrpChips(i.vrps)))))))
+        : el("div", { class: "muted small", text: "No invalid routes." }),
+      d.invalid_total > d.invalid.length ? el("div", { class: "pager", text: `Showing ${d.invalid.length} of ${fmt(d.invalid_total)}.` }) : null);
+  }
+
   // ------------------------------------------------------------------ data refresh
   let stats = null, history = [], hours = 24, lastBasic = null, lastAdvanced = null;
   const rangeLabel = () => (hours >= 48 ? `${hours / 24}d` : `${hours}h`);
@@ -602,6 +655,7 @@
     columnChart($("#cidr6"), s.cidr_breakdown.filter((c) => c.ip_version === 6), "IPv6 prefixes per prefix length");
     renderUnstable(s);
     renderExits(s);
+    refreshRpki();
   }
 
   async function refresh() {
@@ -691,6 +745,7 @@
           ["Cluster list", (r.cluster_list || []).join(", ") || null],
           r.aggregator_as ? ["Aggregator", `AS${r.aggregator_as} ${r.aggregator_address || ""}`] : null,
           r.atomic_aggregate ? ["Atomic aggregate", "yes"] : null,
+          r.rpki ? ["RPKI", el("div", {}, rpkiBadge(r.rpki), r.rpki.vrps && r.rpki.vrps.length ? vrpChips(r.rpki.vrps) : null)] : null,
           ["Last change", r.age],
         ]),
         historyBox,

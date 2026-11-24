@@ -113,6 +113,19 @@ originated_community = "216333:100:130"
 Only the best path per prefix is known: RouterOS sends only active paths, also with BGP
 Add-Path, so backup paths are not visible.
 
+###### RPKI
+With an RPKI validator (Routinator, rpki-client) every active route is validated (RFC 6811) every
+15 minutes: totals of valid / invalid / not-found routes, a list of all invalid routes with the
+reason (origin AS not authorised, or more specific than the ROA allows) and the covering ROAs,
+the RPKI state in the looking glass and an RPKI check of your own prefixes (ROA missing or not
+matching). Configure the JSON export of the validator:
+```toml
+[rpki]
+vrp_url = "http://routinator.example.net:8323/json"   # Routinator: http-listen must be enabled
+```
+The index of about 750,000 VRPs needs roughly 100 MB of memory, plus about 250 MB for a few
+seconds while the export is loaded. Validating 1 million routes takes about 3 seconds.
+
 ###### Prometheus
 Scrape `http://<host>/metrics` (example in [monitoring/prometheus-scrape.yml](monitoring/prometheus-scrape.yml))
 and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.yml):
@@ -123,12 +136,13 @@ and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.
 | `BGPSessionFlapping` | ≥ 3 session drops within an hour |
 | `BGPSessionPrefixesDropped` | a session lost more than half of its accepted prefixes |
 | `BGPOwnPrefixMissing` / `…WrongOrigin` / `…ForeignMoreSpecific` | see *Own prefixes* |
+| `BGPOwnPrefixRPKINotValid`, `BGPRPKIDataStale` | own prefix without matching ROA, validator not reachable |
 | `BGPTableSizeDrop` | the IPv4/IPv6 table shrank by more than 10 % within an hour |
 | `BGPHighRouteChurn` | unusually many route changes |
 | `BGPCollectorDown`, `BGPNeighborPollFailing`, `BGPDashboardStatsStale`, `BGPDashboardDown` | the dashboard itself has a problem |
 
 Test the rules with `promtool test rules monitoring/bgp-alerts.test.yml`.
-Main metrics: `bgp_exit_prefixes`, `bgp_transit_instead_of_peering_prefixes`, `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
+Main metrics: `bgp_rpki_routes`, `bgp_own_prefix_rpki_valid`, `bgp_exit_prefixes`, `bgp_transit_instead_of_peering_prefixes`, `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
 `bgp_own_prefix_ok`, `bgp_prefixes`, `bgp_peer_prefixes`, `bgp_route_changes`,
 `bgp_unstable_prefixes`, `bgp_collector_heartbeat_timestamp_seconds`.
 
@@ -204,6 +218,7 @@ API
 | `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
 | `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
 | `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /bgp/api/v1.0/rpki` | RPKI validation summary and invalid routes |
 | `GET /bgp/api/v1.0/exits` | exits by location and type, peers by location, transit although peered |
 | `GET /metrics` | Prometheus metrics |
 

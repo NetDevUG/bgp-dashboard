@@ -52,6 +52,23 @@ groups:
           summary: "Foreign more specific of own prefix {{ $labels.prefix }} (possible hijack)"
           description: "{{ $value }} more specific prefix(es) with a foreign origin AS – see the dashboard."
 
+  - name: bgp-rpki
+    rules:
+      - alert: BGPOwnPrefixRPKINotValid
+        expr: bgp_own_prefix_rpki_valid == 0
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Own prefix {{ $labels.prefix }} is not RPKI valid (ROA missing or not matching)"
+          description: "Networks doing route origin validation may drop or depreference it."
+
+      - alert: BGPRPKIDataStale
+        expr: (time() - bgp_rpki_last_update_timestamp_seconds > 3600) or bgp_rpki_ok == 0
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "RPKI data could not be refreshed from the validator (Routinator)"
+
   - name: bgp-table
     rules:
       - alert: BGPTableSizeDrop

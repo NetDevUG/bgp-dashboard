@@ -51,6 +51,14 @@ peer_learned_community = "216333:100:120"
 originated_community = "216333:100:130"
 # (transit_community and peer_community_prefix are taken from [network])
 
+[rpki]
+# JSON export of the VRPs of your RPKI validator, empty = RPKI disabled.
+# Routinator: enable the HTTP server (http-listen = ["0.0.0.0:8323"]) and use
+#   vrp_url = "http://routinator.example.net:8323/json"
+# rpki-client: the rpki.json written to its output directory, served via HTTP.
+vrp_url = ""
+refresh_minutes = 15
+
 # Names shown for BGP communities
 [communities]
 "216333:100:100" = "Transit"

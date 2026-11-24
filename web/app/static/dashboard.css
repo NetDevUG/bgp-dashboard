@@ -244,3 +244,7 @@ tr.problem td { background: color-mix(in srgb, var(--critical) 7%, transparent);
 #exits h3 { font-size: 13px; color: var(--text-secondary); margin: 0 0 8px; font-weight: 600; }
 .exits-grid .legend { margin: 4px 0 12px; }
 .explain { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; }
+
+/* --- rpki --------------------------------------------------------------- */
+.rpki-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.rpki-summary .value { font-size: 22px; font-weight: 600; }

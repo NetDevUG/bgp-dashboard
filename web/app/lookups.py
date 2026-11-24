@@ -28,7 +28,8 @@ def is_transit(route: dict, settings: Settings) -> bool:
 
 
 class Lookups:
-    def __init__(self, db, settings: Settings, dns: DnsCache):
+    def __init__(self, db, settings: Settings, dns: DnsCache, rpki=None):
+        self.rpki = rpki
         self.coll = db["bgp"]
         self.settings = settings
         self.dns = dns
@@ -90,6 +91,7 @@ class Lookups:
             "originator_id_dns": originator_dns,
             "cluster_list": network.get("cluster_list"),
             "age": network.get("age"),
+            "rpki": self.rpki.route_state(network["_id"], network.get("origin_asn")) if self.rpki else None,
             "history": history_url if history_url is not None else network.get("history", []),
         }
 

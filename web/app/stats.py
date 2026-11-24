@@ -35,7 +35,8 @@ def _timestamp() -> str:
 
 
 class StatsService:
-    def __init__(self, db, settings: Settings, dns: DnsCache):
+    def __init__(self, db, settings: Settings, dns: DnsCache, rpki=None):
+        self.rpki = rpki
         self.db = db
         self.coll = db["bgp"]
         self.settings = settings
@@ -113,7 +114,7 @@ class StatsService:
             self.coll.distinct("nexthop", ACTIVE),
         )
         self.peer_asns = set(peers)
-        own = await check_own_prefixes(self.coll, self.settings)
+        own = await check_own_prefixes(self.coll, self.settings, rpki=self.rpki)
         own_v4, own_v6 = await asyncio.gather(*(
             self.coll.count_documents({**self.own_filter(), "ip_version": v}) for v in (4, 6)))
         self.data.update(

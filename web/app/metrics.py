@@ -55,7 +55,8 @@ class Exposition:
 
 
 def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str | None,
-                   sessions: dict, collector: dict) -> str:
+                   sessions: dict, collector: dict, rpki: dict | None = None,
+                   extra: list | None = None) -> str:
     m = Exposition()
     m.add("bgp_dashboard_info", 1, {"asn": settings.asn}, help="Dashboard information")
     m.add("bgp_stats_ready", ready, help="1 once the first statistics run finished")
@@ -129,9 +130,27 @@ def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str
                   help="1 if the own prefix is in the table")
             m.add("bgp_own_prefix_origin_ok", bool(p["route"] and p["route"]["origin_ok"]), labels,
                   help="1 if the own prefix is originated by an allowed AS")
+            if p.get("rpki"):
+                m.add("bgp_own_prefix_rpki_valid", p["rpki"]["state"] == "valid", labels,
+                      help="1 if the own prefix is RPKI valid (ROA covers prefix and origin)")
             m.add("bgp_own_prefix_foreign_more_specifics",
                   sum(1 for x in p["more_specifics"] if not x["allowed"]), labels,
                   help="More specific prefixes announced by foreign origin ASNs")
+
+    # RPKI
+    if rpki and rpki.get("enabled"):
+        m.add("bgp_rpki_ok", rpki.get("ok", False), help="1 if the last VRP refresh succeeded")
+        m.add("bgp_rpki_vrps", rpki.get("vrps", 0), help="VRPs loaded from the validator")
+        m.add("bgp_rpki_last_update_timestamp_seconds", _ts(rpki.get("updated")),
+              help="Time of the last successful RPKI validation")
+        for state, per_version in (rpki.get("counts") or {}).items():
+            for v, count in per_version.items():
+                m.add("bgp_rpki_routes", count, {"state": state, "ip_version": v},
+                      help="Active routes by RPKI validation state")
+
+    # Optional integrations add their own metrics
+    for name, value, labels, help_text in extra or []:
+        m.add(name, value, labels, help=help_text)
 
     # Collector
     m.add("bgp_collector_heartbeat_timestamp_seconds", _ts(collector.get("heartbeat")),
