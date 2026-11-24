@@ -113,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "advancedInterval": settings.advanced_stats_interval,
                 "historyDays": settings.stats_history_days,
                 "ownPrefixesConfigured": len(settings.own_prefixes),
+                "exitsConfigured": bool(settings.location_community_prefix or settings.peer_learned_community),
             },
         })
 
@@ -182,6 +183,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def get_unstable(request: Request):
         """Prefixes with the most route changes in the configured window."""
         return st(request).data["unstable"]
+
+    @app.get(f"{API}/exits", tags=["monitoring"])
+    async def get_exits(request: Request):
+        """Where (location) and how (transit / peering / own) prefixes leave the network."""
+        return st(request).data["exits"]
 
     @app.get("/metrics", response_class=PlainTextResponse, tags=["monitoring"])
     async def metrics(request: Request):

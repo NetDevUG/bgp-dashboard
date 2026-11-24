@@ -465,6 +465,98 @@
       el("td", { title: new Date(t.last_change).toLocaleString(), text: timeAgo(t.last_change) }))));
   }
 
+  // ------------------------------------------------------------------ exits
+  const EXIT_TYPES = [
+    { key: "transit", label: "Transit", color: "var(--series-1)" },
+    { key: "peering", label: "Peering", color: "var(--series-2)" },
+    { key: "originated", label: "Own (originated)", color: "var(--series-3)" },
+    { key: "other", label: "Other", color: "var(--series-4)", darkInk: true },
+  ];
+  const shortLoc = (name) => String(name || "").replace(/^Location\s+/i, "");
+
+  function renderExits(s) {
+    const box = $("#exits");
+    const ex = s.exits || {};
+    if (!CONFIG.exitsConfigured || !ex.configured) {
+      fill(box, el("p", { class: "hint" }, "Not configured. Set ", el("code", { text: "[exits]" }),
+        " in ", el("code", { text: "config/dashboard.toml" }),
+        " (location community prefix and the community for routes learned from peers)."));
+      return;
+    }
+    const sum = (loc, key) => loc[key]["4"] + loc[key]["6"];
+    const used = EXIT_TYPES.filter((t) => ex.locations.some((l) => sum(l, t.key) > 0));
+
+    // stacked bar per location (tall segmented bar: share printed inside when it fits)
+    const bars = ex.locations.map((loc) => {
+      const bar = el("div", { class: "share", role: "img",
+        "aria-label": `${shortLoc(loc.name)}: ` + used.map((t) => `${t.label} ${fmt(sum(loc, t.key))}`).join(", ") });
+      for (const t of used) {
+        const value = sum(loc, t.key);
+        if (!value) continue;
+        const pct = (value / loc.total) * 100;
+        const part = el("div", { class: "part" + (t.darkInk ? " dark-ink" : ""), tabindex: 0,
+          style: `width:${pct}%;background:${t.color}` }, pct >= 9 ? `${Math.round(pct)}%` : "");
+        const enter = (evt) => showTip(evt, `${fmt(value)} prefixes · ${pct.toFixed(1)}%`,
+          `${shortLoc(loc.name)} · ${t.label} (IPv4 ${fmt(loc[t.key]["4"])}, IPv6 ${fmt(loc[t.key]["6"])})`);
+        part.addEventListener("pointermove", enter); part.addEventListener("focus", enter);
+        part.addEventListener("pointerleave", hideTip); part.addEventListener("blur", hideTip);
+        bar.append(part);
+      }
+      return el("div", { class: "exit-row" },
+        el("div", { class: "exit-head" }, el("strong", { text: shortLoc(loc.name) }), el("span", { class: "muted", text: `${fmt(loc.total)} prefixes` })),
+        bar);
+    });
+
+    // table view with all numbers
+    const table = el("table", { class: "data" },
+      el("thead", {}, el("tr", {}, el("th", { text: "Location" }),
+        ...used.map((t) => el("th", { class: "num" }, t.label, el("br"), "IPv4 / IPv6")),
+        el("th", { class: "num", text: "Total" }))),
+      el("tbody", {}, ...ex.locations.map((loc) => el("tr", {},
+        el("td", { text: shortLoc(loc.name) }),
+        ...used.map((t) => el("td", { class: "num", text: `${fmt(loc[t.key]["4"])} / ${fmt(loc[t.key]["6"])}` })),
+        el("td", { class: "num", text: fmt(loc.total) })))));
+
+    // peers / exchanges per location
+    const locCodes = ex.locations.map((l) => l.location).filter(Boolean);
+    const viaTable = ex.via.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+      el("thead", {}, el("tr", {}, el("th", { text: "Peer / exchange" }),
+        ...ex.locations.filter((l) => l.location).map((l) => el("th", { class: "num", text: shortLoc(l.name) })),
+        el("th", { class: "num", text: "Total" }))),
+      el("tbody", {}, ...ex.via.map((v) => el("tr", {},
+        el("td", {}, v.name || v.community, v.name ? el("span", { class: "cell-sub", text: v.community }) : null),
+        ...locCodes.map((c) => el("td", { class: "num", text: v.locations[c] ? fmt(v.locations[c]) : "–" })),
+        el("td", { class: "num", text: fmt(v.total) })))))) : el("div", { class: "muted small", text: "No routes with a peer community." });
+
+    // via transit although the origin AS is a direct peer
+    const tip = ex.transit_instead_of_peering;
+    let tipBox = null;
+    if (tip && tip.available) {
+      tipBox = el("div", {},
+        el("h3", { text: `Via transit although the origin AS is a direct peer · ${fmt(tip.total_prefixes)} prefixes` }),
+        el("p", { class: "explain", text: "These networks peer with you, but the listed prefixes are reached via transit: the peer does not announce them to you (or not at that location), or your policy prefers transit." }),
+        tip.asns.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+          el("thead", {}, el("tr", {}, ...["Origin AS", "Via transit", "Via peering", "Peering at", "Examples"].map((h, i) => el("th", { class: i === 1 || i === 2 ? "num" : null, text: h })))),
+          el("tbody", {}, ...tip.asns.map((a) => el("tr", {},
+            el("td", {}, asLink(a.asn), a.name && a.name !== "(DNS Error)" ? el("span", { class: "cell-sub", text: a.name }) : null),
+            el("td", { class: "num", text: fmt(a.prefixes_via_transit) }),
+            el("td", { class: "num", text: fmt(a.prefixes_via_peering) }),
+            el("td", { class: "small", text: a.peering_locations.map(shortLoc).join(", ") || "–" }),
+            el("td", {}, el("div", { class: "chips" }, ...a.samples.map((p) =>
+              el("a", { class: "chip", href: `#lookup=${encodeURIComponent(p.split("/")[0])}`, text: p }))))))))) 
+          : el("div", { class: "muted small", text: "None – every prefix of your peers is reached via peering." }));
+    }
+
+    fill(box, el("div", { class: "exits-grid" },
+      el("div", {},
+        el("h3", { text: "Exit by location" }),
+        el("div", { class: "legend" }, ...used.map((t) => el("span", { style: `--swatch:${t.color}`, text: t.label }))),
+        ...bars,
+        table),
+      el("div", {}, el("h3", { text: "Peers & exchanges by location" }), viaTable)),
+      tipBox ? el("div", { style: "margin-top:16px" }, tipBox) : null);
+  }
+
   // ------------------------------------------------------------------ data refresh
   let stats = null, history = [], hours = 24, lastBasic = null, lastAdvanced = null;
   const rangeLabel = () => (hours >= 48 ? `${hours / 24}d` : `${hours}h`);
@@ -503,6 +595,7 @@
     columnChart($("#cidr4"), s.cidr_breakdown.filter((c) => c.ip_version === 4), "IPv4 prefixes per prefix length");
     columnChart($("#cidr6"), s.cidr_breakdown.filter((c) => c.ip_version === 6), "IPv6 prefixes per prefix length");
     renderUnstable(s);
+    renderExits(s);
   }
 
   async function refresh() {

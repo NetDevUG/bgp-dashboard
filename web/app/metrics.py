@@ -100,6 +100,23 @@ def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str
               {"window": f"{unstable['window_hours']}h", "min_changes": unstable["min_changes"]},
               help="Prefixes with at least min_changes changes in the window")
 
+        exits = stats.get("exits") or {}
+        if exits.get("configured"):
+            for loc in exits["locations"]:
+                for kind in exits["types"]:
+                    for v in ("4", "6"):
+                        m.add("bgp_exit_prefixes", loc[kind][v],
+                              {"location": loc["name"], "type": kind, "ip_version": v},
+                              help="Active prefixes by exit location and route type")
+            for peer in exits["via"]:
+                m.add("bgp_peer_community_prefixes", peer["total"],
+                      {"community": peer["community"], "name": peer["name"] or ""},
+                      help="Active prefixes per peer/exchange community")
+            tip = exits["transit_instead_of_peering"]
+            if tip["available"]:
+                m.add("bgp_transit_instead_of_peering_prefixes", tip["total_prefixes"],
+                      help="Prefixes reached via transit although their origin AS is a direct peer")
+
         for p in stats["own_prefixes"]:
             labels = {"prefix": p["prefix"]}
             m.add("bgp_own_prefix_ok", p["ok"], labels, help="1 if the own prefix has no problem")

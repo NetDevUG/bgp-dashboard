@@ -40,6 +40,17 @@ unstable_top = 20
 # Prefixes with at least this many changes in the window count as unstable (/metrics)
 unstable_min_changes = 3
 
+[exits]
+# Exit analysis: where (location) and how (transit / peering / own) prefixes leave
+# the network. Uses the communities set on import; leave empty to disable.
+# Community prefix that marks the location where a route was learned
+location_community_prefix = "216333:105:"
+# Route learned from a peer (IX or bilateral)
+peer_learned_community = "216333:100:120"
+# Route originated in the own AS
+originated_community = "216333:100:130"
+# (transit_community and peer_community_prefix are taken from [network])
+
 # Names shown for BGP communities
 [communities]
 "216333:100:100" = "Transit"

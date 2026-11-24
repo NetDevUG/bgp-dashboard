@@ -36,6 +36,10 @@ class Settings:
     unstable_window_hours: int = 24
     unstable_top: int = 20
     unstable_min_changes: int = 3
+    # Exit analysis (empty = disabled)
+    location_community_prefix: str = ""
+    peer_learned_community: str = ""
+    originated_community: str = ""
     # BGP sessions: data older than this is shown as stale (collector polls every 10s)
     neighbor_stale_seconds: int = 60
 
@@ -55,7 +59,8 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
                 data = tomllib.load(fh)
             break
 
-    sections = {**data.get("network", {}), **data.get("dashboard", {}), **data.get("monitoring", {})}
+    sections = {**data.get("network", {}), **data.get("dashboard", {}),
+                **data.get("monitoring", {}), **data.get("exits", {})}
     known = Settings.__dataclass_fields__
     kwargs = {k: (tuple(v) if isinstance(v, list) else v) for k, v in sections.items() if k in known}
     kwargs["community_names"] = {str(k): str(v) for k, v in data.get("communities", {}).items()}

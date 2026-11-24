@@ -12,6 +12,8 @@ A "realtime" web view of your BGP network
 - Are all BGP sessions up? When did they flap and why?
 - Are my own prefixes visible, with the right origin AS – or is someone announcing (parts of) them?
 - Which prefixes are unstable (flapping, path changes)?
+- Where (location) and how (transit / peering) do prefixes leave the network? Which peers'
+  prefixes are still reached via transit?
 - Prometheus metrics and ready-made alert rules
 
 
@@ -91,6 +93,24 @@ The collector records the time of every real route change (attribute change, wit
 re-announce; not the re-learning after a restart). The dashboard lists the prefixes with the most
 changes in the last `unstable_window_hours` (default 24h) plus the total churn.
 
+###### Exits
+If your routers tag routes on import with communities for the location and the kind of
+neighbor, the dashboard shows per location how many prefixes leave via transit, peering or are
+originated locally, which peers/exchanges deliver how many prefixes where, and which prefixes of
+direct peers are still reached via transit (the peer does not announce them to you, or your
+policy prefers transit). Configure it in `config/dashboard.toml`:
+```toml
+[network]
+transit_community = "216333:100:100"
+peer_community_prefix = "216333:101:"          # which peer / exchange
+[exits]
+location_community_prefix = "216333:105:"      # where the route was learned
+peer_learned_community = "216333:100:120"
+originated_community = "216333:100:130"
+```
+Only the best path per prefix is known: RouterOS sends only active paths, also with BGP
+Add-Path, so backup paths are not visible.
+
 ###### Prometheus
 Scrape `http://<host>/metrics` (example in [monitoring/prometheus-scrape.yml](monitoring/prometheus-scrape.yml))
 and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.yml):
@@ -106,7 +126,7 @@ and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.
 | `BGPCollectorDown`, `BGPNeighborPollFailing`, `BGPDashboardStatsStale`, `BGPDashboardDown` | the dashboard itself has a problem |
 
 Test the rules with `promtool test rules monitoring/bgp-alerts.test.yml`.
-Main metrics: `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
+Main metrics: `bgp_exit_prefixes`, `bgp_transit_instead_of_peering_prefixes`, `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
 `bgp_own_prefix_ok`, `bgp_prefixes`, `bgp_peer_prefixes`, `bgp_route_changes`,
 `bgp_unstable_prefixes`, `bgp_collector_heartbeat_timestamp_seconds`.
 
@@ -178,6 +198,7 @@ API
 | `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
 | `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
 | `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /bgp/api/v1.0/exits` | exits by location and type, peers by location, transit although peered |
 | `GET /metrics` | Prometheus metrics |
 
 
