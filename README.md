@@ -31,6 +31,8 @@ How it works
   which writes the routes to MongoDB in batches (one `bulk_write` per batch, keeps up with a full table).
 - Every prefix is one document. When the attributes of a prefix change, the previous version is
   kept in its `history` (newest first, `MAX_PREFIX_HISTORY` entries, default 100).
+- Prefixes that have been inactive for `INACTIVE_PREFIX_DAYS` (default 30) are deleted by MongoDB
+  (TTL index), so the database does not grow with every prefix ever seen.
 - If `gobgpd` or the collector dies, the container exits and Docker restarts it. On start all
   stored prefixes are marked inactive and the RIB is learned again.
 - Every 10s the collector also reads `gobgp neighbor -j` and stores the state of all BGP sessions
@@ -162,6 +164,7 @@ Environment variables (see `docker-compose.yml`):
 | `MONGO_VERSION` | `8` | MongoDB image tag |
 | `MONGO_CACHE_GB` | `1` | WiredTiger cache size |
 | `MAX_PREFIX_HISTORY` | `100` | Versions kept per prefix (`0` = unlimited) |
+| `INACTIVE_PREFIX_DAYS` | `30` | Prefixes withdrawn / not re-learned for this many days are deleted incl. history (`0` = never) |
 | `NEIGHBOR_POLL_INTERVAL` | `10` | Seconds between BGP session polls (`0` = off) |
 | `NEIGHBOR_EVENT_DAYS` | `90` | Days session events are kept |
 | `GOBGP_CONFIG_AUTO_RELOAD` | `true` | Apply changes of `gobgpd.conf` without restart |

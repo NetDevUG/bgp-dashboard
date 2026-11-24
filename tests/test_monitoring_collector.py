@@ -166,3 +166,37 @@ def test_poller_reports_errors_but_keeps_heartbeat(db):
     status = db.collector_status.find_one({"_id": "collector"})
     assert "FileNotFoundError" in status["neighbor_error"] and status["heartbeat"]
     assert "neighbors_polled" not in status
+
+
+# --------------------------------------------------------------------------- cleanup of old prefixes
+def test_inactive_since_lifecycle(db):
+    p = "198.51.100.0/24"
+    c.process_batch(db, [_line(p, [1, 2])])
+    assert "inactive_since" not in db.bgp.find_one({"_id": p})
+    c.process_batch(db, [_line(p, [1, 2], withdrawal=True)])
+    first = db.bgp.find_one({"_id": p})["inactive_since"]
+    c.process_batch(db, [_line(p, [1, 2], withdrawal=True)])          # repeated withdraw keeps the start
+    assert db.bgp.find_one({"_id": p})["inactive_since"] == first
+    c.process_batch(db, [_line(p, [1, 2])])                            # announced again
+    assert "inactive_since" not in db.bgp.find_one({"_id": p})
+    c.process_batch(db, [_line("203.0.113.0/24", [7], withdrawal=True)])  # first seen as withdrawal
+    assert db.bgp.find_one({"_id": "203.0.113.0/24"})["inactive_since"]
+
+
+def test_initialize_marks_inactive_since(db):
+    c.process_batch(db, [_line("198.51.100.0/24", [1])])
+    db.bgp.insert_one({"_id": "192.0.2.0/24", "active": False})        # written by an old version
+    c.initialize_database(db)
+    assert db.bgp.count_documents({"inactive_since": {"$exists": True}}) == 2
+    c.process_batch(db, [_line("198.51.100.0/24", [1])])                # re-learned after restart
+    assert "inactive_since" not in db.bgp.find_one({"_id": "198.51.100.0/24"})
+
+
+def test_cleanup_index(db):
+    ttl = lambda: db.bgp.index_information().get(c.TTL_INDEX)  # noqa: E731
+    c.ensure_cleanup_index(db, 30)
+    assert ttl()["expireAfterSeconds"] == 30 * 86400
+    c.ensure_cleanup_index(db, 7)                                       # changed setting
+    assert ttl()["expireAfterSeconds"] == 7 * 86400
+    c.ensure_cleanup_index(db, 0)                                       # disabled
+    assert ttl() is None
