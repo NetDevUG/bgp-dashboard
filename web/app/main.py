@@ -107,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "config": {
                 "asn": settings.asn,
                 "customerCommunity": settings.customer_community,
+                "customersEnabled": bool(settings.customer_community),
                 "transitCommunity": settings.transit_community,
                 "peerCommunityPrefix": settings.peer_community_prefix,
                 "statsInterval": settings.stats_interval,

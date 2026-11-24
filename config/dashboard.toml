@@ -3,9 +3,9 @@
 
 [network]
 asn = 216333
-# Prefixes learned from directly connected customers
-# (216333:100:130 = "originated in AS216333", taken over from the old constants.py)
-customer_community = "216333:100:130"
+# Prefixes learned from directly connected customers.
+# Leave empty if you have no customers: the dashboard then shows your own prefixes instead.
+customer_community = ""
 # Prefixes learned from *paid* transit providers
 transit_community = "216333:100:100"
 # Community prefix (starts with) for prefixes learned from bilateral peers and exchanges

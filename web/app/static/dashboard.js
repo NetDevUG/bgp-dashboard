@@ -101,9 +101,15 @@
     { key: "ipv6_table_size", label: "IPv6 prefixes", sub: "IPv6 BGP table size" },
     { key: "nexthop_ip_count", label: "Next-hop addresses", sub: "Unique egress IPs" },
     { key: "avg_as_path_length", label: "Average AS path length", sub: "Prepends ignored", decimals: 2 },
-    { key: "customer_ipv4_prefixes", label: "Customer IPv4 prefixes", sub: "Originated by customers" },
-    { key: "customer_ipv6_prefixes", label: "Customer IPv6 prefixes", sub: "Originated by customers" },
-    { key: "customer_count", label: "BGP customers", sub: `Tagged ${CONFIG.customerCommunity}` },
+    ...(CONFIG.customersEnabled ? [
+      { key: "customer_ipv4_prefixes", label: "Customer IPv4 prefixes", sub: "Originated by customers" },
+      { key: "customer_ipv6_prefixes", label: "Customer IPv6 prefixes", sub: "Originated by customers" },
+      { key: "customer_count", label: "BGP customers", sub: `Tagged ${CONFIG.customerCommunity}` },
+    ] : [
+      { key: "own_ipv4_prefixes", label: `Own IPv4 prefixes`, sub: `Originated in AS${CONFIG.asn}` },
+      { key: "own_ipv6_prefixes", label: `Own IPv6 prefixes`, sub: `Originated in AS${CONFIG.asn}` },
+      { key: "route_changes_1h", label: "Route changes", sub: "In the last hour" },
+    ]),
   ];
   const tileNodes = {};
   for (const t of TILES) {

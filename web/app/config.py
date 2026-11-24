@@ -16,7 +16,8 @@ _DEFAULT_PATHS = (
 @dataclass(frozen=True)
 class Settings:
     asn: int = 3701
-    customer_community: str = "3701:370"
+    # Empty = no customers: the dashboard shows the own prefixes instead
+    customer_community: str = ""
     transit_community: str = "3701:380"
     peer_community_prefix: str = "3701:39"
     community_names: dict[str, str] = field(default_factory=dict)

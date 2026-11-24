@@ -151,6 +151,9 @@ Configuration changes never need a rebuild (`docker compose build` is only neede
 | `gobgp/gobgpd.conf` | BGP sessions | automatically on save (GoBGP config auto-reload) |
 | `config/dashboard.toml` | own ASN, customer/transit/peer communities, community names, refresh intervals | `docker compose restart web` |
 
+Without customers leave `customer_community` empty: instead of the customer tiles the dashboard
+then shows your own (originated) IPv4/IPv6 prefixes and the route changes of the last hour.
+
 Environment variables (see `docker-compose.yml`):
 
 | Variable | Default | |

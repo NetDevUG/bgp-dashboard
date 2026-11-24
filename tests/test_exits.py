@@ -122,3 +122,26 @@ async def test_not_configured(exits_db):
         assert (await http.get("/bgp/api/v1.0/exits")).json() == {"configured": False}
         assert "bgp_exit_prefixes" not in (await http.get("/metrics")).text
     await ctx.__aexit__(None, None, None)
+
+
+async def test_own_prefix_tiles_without_customers(client):
+    s = (await client.get("/bgp/api/v1.0/stats")).json()
+    assert s["customers_enabled"] is False and s["customer_count"] == 0
+    assert (s["own_ipv4_prefixes"], s["own_ipv6_prefixes"]) == (1, 0)   # tagged 216333:100:130
+    metrics = (await client.get("/metrics")).text
+    assert 'bgp_own_prefixes{ip_version="4"} 1' in metrics and "bgp_customers" not in metrics
+    page = (await client.get("/")).text
+    assert '"customersEnabled": false' in page
+
+
+async def test_customers_enabled(exits_db):
+    from app.config import Settings
+    ctx, http = await _client(Settings(mongo_uri=MONGO_URI, mongo_db=DB_NAME, background_jobs=False,
+                                       customer_community="216333:100:120"))
+    async with http:
+        s = (await http.get("/bgp/api/v1.0/stats")).json()
+        assert s["customers_enabled"] is True
+        assert sorted(c["asn"] for c in s["customers"]) == [6939, 13335]
+        assert s["own_ipv4_prefixes"] == 1      # no originated community configured: empty AS path
+        assert "bgp_customers 2" in (await http.get("/metrics")).text
+    await ctx.__aexit__(None, None, None)

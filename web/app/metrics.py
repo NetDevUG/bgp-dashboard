@@ -72,10 +72,14 @@ def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str
         m.add("bgp_nexthop_addresses", stats["nexthop_ip_count"], help="Unique next-hop addresses")
         m.add("bgp_as_path_length_avg", float(stats["avg_as_path_length"]),
               help="Average AS path length (prepends ignored)")
-        m.add("bgp_customers", stats["customer_count"], help="Number of customer ASNs")
+        if settings.customer_community:
+            m.add("bgp_customers", stats["customer_count"], help="Number of customer ASNs")
+            for v in (4, 6):
+                m.add("bgp_customer_prefixes", stats[f"customer_ipv{v}_prefixes"], {"ip_version": v},
+                      help="Prefixes originated by customers")
         for v in (4, 6):
-            m.add("bgp_customer_prefixes", stats[f"customer_ipv{v}_prefixes"], {"ip_version": v},
-                  help="Prefixes originated by customers")
+            m.add("bgp_own_prefixes", stats[f"own_ipv{v}_prefixes"], {"ip_version": v},
+                  help="Prefixes originated in the own AS")
         if stats.get("transit_percentage") is not None:
             m.add("bgp_transit_ratio", stats["transit_percentage"] / 100,
                   help="Share of prefixes tagged with the transit community")
