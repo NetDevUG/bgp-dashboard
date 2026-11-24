@@ -604,7 +604,8 @@
       const low = vis.ratio !== null && vis.ratio !== undefined && vis.ratio < 0.8;
       return el("div", { class: "own-item" + (bad ? " problem" : "") },
         el("div", { class: "own-head" }, lookupLink(p.prefix, p.prefix.split("/")[0]),
-          stateBadge(bad ? "err" : low ? "warn" : "ok", bad ? "Foreign origin seen" : low ? "Low visibility" : "OK")),
+          bad ? stateBadge("err", "Foreign origin seen") : low ? stateBadge("warn", "Low visibility")
+            : !d.connected && !vis.updated ? stateBadge("muted", "No data yet") : stateBadge("ok", "OK")),
         el("div", { class: "detail" },
           vis.ris_peers_seeing !== undefined && vis.ris_peers_seeing !== null
             ? `Seen by ${fmt(vis.ris_peers_seeing)} of ${fmt(vis.total_ris_peers)} RIS peers (${Math.round((vis.ratio || 0) * 100)}%)`
