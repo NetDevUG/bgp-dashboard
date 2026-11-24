@@ -208,6 +208,26 @@ API
 | `GET /metrics` | Prometheus metrics |
 
 
+Prebuilt images and CI
+---------
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the tests (Python 3.15,
+MongoDB 8) and the Prometheus rule tests on every push and pull request and builds both images for
+`linux/amd64` and `linux/arm64`. Pushes to `master` and tags `v*` publish them to the GitHub
+Container Registry:
+
+```
+$ docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+$ docker compose -f docker-compose.yml -f docker-compose.images.yml up -d
+```
+(or `COMPOSE_FILE=docker-compose.yml:docker-compose.images.yml` in `.env`; `BGP_DASHBOARD_TAG`
+selects `latest`, a release such as `1.2.0` or `sha-<commit>`). Packages of an organisation start
+as private: make them public in the package settings or run `docker login ghcr.io` first.
+
+Dependabot opens weekly pull requests for new Python packages, base images and GitHub Actions; CI
+shows right away whether they work. The GoBGP version (`GOBGP_VERSION` in `gobgp/Dockerfile`) is
+not covered by Dependabot and has to be raised by hand.
+
+
 Development
 ---------
 ```

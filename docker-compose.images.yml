@@ -1,0 +1,12 @@
+# Use the images built by GitHub Actions instead of building locally:
+#   docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.images.yml up -d
+# (or put COMPOSE_FILE=docker-compose.yml:docker-compose.images.yml into .env)
+# BGP_DASHBOARD_TAG: latest (master), a release like 1.2.0, or sha-<commit>
+services:
+  gobgp:
+    image: ghcr.io/netdevug/bgp-dashboard-gobgp:${BGP_DASHBOARD_TAG:-latest}
+    build: !reset null
+  web:
+    image: ghcr.io/netdevug/bgp-dashboard-web:${BGP_DASHBOARD_TAG:-latest}
+    build: !reset null
