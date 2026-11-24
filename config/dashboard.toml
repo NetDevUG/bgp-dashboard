@@ -3,8 +3,9 @@
 
 [network]
 asn = 216333
-# Prefixes learned from directly connected customers
-customer_community = "216333:100:130"
+# Prefixes learned from directly connected customers.
+# Leave empty if you have no customers: the dashboard then shows your own prefixes instead.
+customer_community = ""
 # Prefixes learned from *paid* transit providers
 transit_community = "216333:100:100"
 # Community prefix (starts with) for prefixes learned from bilateral peers and exchanges
@@ -39,10 +40,62 @@ unstable_top = 20
 # Prefixes with at least this many changes in the window count as unstable (/metrics)
 unstable_min_changes = 3
 
+[exits]
+# Exit analysis: where (location) and how (transit / peering / own) prefixes leave
+# the network. Uses the communities set on import; leave empty to disable.
+# Community prefix that marks the location where a route was learned
+location_community_prefix = "216333:105:"
+# Route learned from a peer (IX or bilateral)
+peer_learned_community = "216333:100:120"
+# Route originated in the own AS
+originated_community = "216333:100:130"
+# (transit_community and peer_community_prefix are taken from [network])
+
+[rpki]
+# JSON export of the VRPs of your RPKI validator, empty = RPKI disabled.
+# Routinator: enable the HTTP server (http-listen = ["0.0.0.0:8323"]) and use
+#   vrp_url = "http://routinator.example.net:8323/json"
+# rpki-client: the rpki.json written to its output directory, served via HTTP.
+vrp_url = ""
+refresh_minutes = 15
+
+[akvorado]
+# Optional: outgoing traffic per destination AS from Akvorado's ClickHouse, used to rank
+# "via transit although peered" and the peering suggestions by traffic instead of
+# prefix counts. Empty = disabled. ClickHouse HTTP interface (port 8123) of the Akvorado host:
+#   clickhouse_url = "http://akvorado.example.net:8123/"
+# User and password: AKVORADO_CLICKHOUSE_USER / AKVORADO_CLICKHOUSE_PASSWORD in .env
+# (a user with SELECT on the Akvorado database is enough, readonly = 1 is fine).
+clickhouse_url = ""
+database = "default"
+table = "flows_5m0s"
+window_hours = 24
+
+[peeringdb]
+# Peering suggestions: networks directly behind your transit providers that are present at
+# one of your internet exchanges (needs HTTPS access to www.peeringdb.com from the dashboard).
+# Optional API key for a higher rate limit: PEERINGDB_API_KEY in .env
+enabled = true
+refresh_hours = 12
+# how many networks behind the transits are checked (by traffic with Akvorado, else prefixes)
+candidates = 50
+
+[ris_live]
+# External view: watch the own prefixes ([monitoring] own_prefixes) and their more specifics
+# with RIPE RIS Live (WebSocket to ris-live.ripe.net) and RIPEstat (stat.ripe.net).
+# Foreign origins anywhere on the Internet are reported (possible hijack).
+# Needs own_prefixes and HTTPS / WSS access to the RIPE NCC from the dashboard.
+enabled = true
+# days the foreign announcement events are kept
+event_days = 30
+
 # Names shown for BGP communities
 [communities]
 "216333:100:100" = "Transit"
-"216333:100:130" = "Customers"
+"216333:100:120" = "Learned from peer"
+"216333:100:130" = "Originated in AS216333"
+"216333:105:1" = "Location Meppel, NL"
+"216333:105:2" = "Location Amsterdam, NL"
 "216333:101:13335" = "Cloudflare"
 "216333:101:6939" = "HE"
 "216333:101:16276" = "OVH"

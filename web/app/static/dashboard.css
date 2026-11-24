@@ -229,3 +229,22 @@ tr.problem td { background: color-mix(in srgb, var(--critical) 7%, transparent);
 .chip.bad { outline: 1px solid var(--critical); }
 .hint { color: var(--text-secondary); font-size: 13px; }
 .hint code { background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+
+/* --- exits -------------------------------------------------------------- */
+.viz-root { --series-3: #1baf7a; --series-4: #eda100; }
+:root[data-theme="dark"] .viz-root { --series-3: #199e70; --series-4: #c98500; }
+@media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .viz-root { --series-3: #199e70; --series-4: #c98500; } }
+.exits-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 24px; }
+@media (max-width: 1100px) { .exits-grid { grid-template-columns: minmax(0, 1fr); } }
+.exit-row { margin-bottom: 14px; }
+.exit-row .exit-head { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+.exit-row .exit-head strong { font-weight: 600; }
+.exit-row .share { margin: 0; }
+.share .part.dark-ink { color: #0b0b0b; }
+#exits h3 { font-size: 13px; color: var(--text-secondary); margin: 0 0 8px; font-weight: 600; }
+.exits-grid .legend { margin: 4px 0 12px; }
+.explain { font-size: 12px; color: var(--text-secondary); margin: 0 0 8px; }
+
+/* --- rpki --------------------------------------------------------------- */
+.rpki-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.rpki-summary .value { font-size: 22px; font-weight: 600; }

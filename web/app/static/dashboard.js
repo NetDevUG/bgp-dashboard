@@ -101,9 +101,15 @@
     { key: "ipv6_table_size", label: "IPv6 prefixes", sub: "IPv6 BGP table size" },
     { key: "nexthop_ip_count", label: "Next-hop addresses", sub: "Unique egress IPs" },
     { key: "avg_as_path_length", label: "Average AS path length", sub: "Prepends ignored", decimals: 2 },
-    { key: "customer_ipv4_prefixes", label: "Customer IPv4 prefixes", sub: "Originated by customers" },
-    { key: "customer_ipv6_prefixes", label: "Customer IPv6 prefixes", sub: "Originated by customers" },
-    { key: "customer_count", label: "BGP customers", sub: `Tagged ${CONFIG.customerCommunity}` },
+    ...(CONFIG.customersEnabled ? [
+      { key: "customer_ipv4_prefixes", label: "Customer IPv4 prefixes", sub: "Originated by customers" },
+      { key: "customer_ipv6_prefixes", label: "Customer IPv6 prefixes", sub: "Originated by customers" },
+      { key: "customer_count", label: "BGP customers", sub: `Tagged ${CONFIG.customerCommunity}` },
+    ] : [
+      { key: "own_ipv4_prefixes", label: `Own IPv4 prefixes`, sub: `Originated in AS${CONFIG.asn}` },
+      { key: "own_ipv6_prefixes", label: `Own IPv6 prefixes`, sub: `Originated in AS${CONFIG.asn}` },
+      { key: "route_changes_1h", label: "Route changes", sub: "In the last hour" },
+    ]),
   ];
   const tileNodes = {};
   for (const t of TILES) {
@@ -413,8 +419,18 @@
 
   const PROBLEM_LABELS = {
     missing: "Missing", wrong_origin: "Foreign origin", foreign_more_specific: "Foreign more-specific",
-    invalid_config: "Invalid config",
+    invalid_config: "Invalid config", rpki_invalid: "RPKI invalid", rpki_not_found: "No ROA",
   };
+  const RPKI_LABELS = { valid: "RPKI valid", invalid: "RPKI invalid", "not-found": "No ROA (not found)" };
+  const RPKI_LEVEL = { valid: "ok", invalid: "err", "not-found": "muted" };
+  const RPKI_REASON = { as: "origin AS not authorised", length: "more specific than the ROA allows" };
+  function rpkiBadge(r) {
+    if (!r) return null;
+    const text = RPKI_LABELS[r.state] + (r.reason ? ` – ${RPKI_REASON[r.reason] || r.reason}` : "");
+    return stateBadge(RPKI_LEVEL[r.state] || "muted", text);
+  }
+  const vrpChips = (vrps) => el("div", { class: "chips" }, ...(vrps || []).map((v) =>
+    el("span", { class: "chip" }, `${v.prefix} max /${v.max_length}`, el("small", { text: `AS${v.asn}` }))));
   function renderOwnPrefixes(s) {
     const box = $("#ownPrefixes");
     if (!CONFIG.ownPrefixesConfigured) {
@@ -439,6 +455,7 @@
       return el("div", { class: "own-item" + (p.ok ? "" : " problem") },
         el("div", { class: "own-head" }, lookupLink(p.prefix, p.prefix.split("/")[0]), stateBadge(p.ok ? "ok" : "err", label)),
         detail,
+        p.rpki ? el("div", { class: "detail" }, rpkiBadge(p.rpki)) : null,
         p.more_specifics.length ? el("div", { class: "chips" }, ...p.more_specifics.slice(0, 30).map((m) =>
           el("a", { class: "chip" + (m.allowed ? "" : " bad"), href: `#lookup=${encodeURIComponent(m.prefix.split("/")[0])}`,
             title: m.allowed ? "allowed origin" : "foreign origin" }, m.prefix, el("small", { text: m.origin_asn === null ? "local" : `AS${m.origin_asn}` })))) : null,
@@ -463,6 +480,226 @@
       el("td", { class: "num" }, t.nexthop_asn === null ? "–" : asLink(t.nexthop_asn)),
       el("td", {}, stateBadge(t.active ? "ok" : "muted", t.active ? "announced" : "withdrawn")),
       el("td", { title: new Date(t.last_change).toLocaleString(), text: timeAgo(t.last_change) }))));
+  }
+
+  // ------------------------------------------------------------------ exits
+  const EXIT_TYPES = [
+    { key: "transit", label: "Transit", color: "var(--series-1)" },
+    { key: "peering", label: "Peering", color: "var(--series-2)" },
+    { key: "originated", label: "Own (originated)", color: "var(--series-3)" },
+    { key: "other", label: "Other", color: "var(--series-4)", darkInk: true },
+  ];
+  function fmtBps(bps) {
+    if (bps === null || bps === undefined) return "–";
+    const units = [["Tbit/s", 1e12], ["Gbit/s", 1e9], ["Mbit/s", 1e6], ["kbit/s", 1e3]];
+    for (const [unit, f] of units) if (bps >= f) return `${(bps / f).toFixed(bps / f >= 100 ? 0 : 1)} ${unit}`;
+    return `${Math.round(bps)} bit/s`;
+  }
+  const shortLoc = (name) => String(name || "").replace(/^Location\s+/i, "");
+
+  function renderExits(s) {
+    const box = $("#exits");
+    const ex = s.exits || {};
+    if (!CONFIG.exitsConfigured || !ex.configured) {
+      fill(box, el("p", { class: "hint" }, "Not configured. Set ", el("code", { text: "[exits]" }),
+        " in ", el("code", { text: "config/dashboard.toml" }),
+        " (location community prefix and the community for routes learned from peers)."));
+      return;
+    }
+    const sum = (loc, key) => loc[key]["4"] + loc[key]["6"];
+    const used = EXIT_TYPES.filter((t) => ex.locations.some((l) => sum(l, t.key) > 0));
+
+    // stacked bar per location (tall segmented bar: share printed inside when it fits)
+    const bars = ex.locations.map((loc) => {
+      const bar = el("div", { class: "share", role: "img",
+        "aria-label": `${shortLoc(loc.name)}: ` + used.map((t) => `${t.label} ${fmt(sum(loc, t.key))}`).join(", ") });
+      for (const t of used) {
+        const value = sum(loc, t.key);
+        if (!value) continue;
+        const pct = (value / loc.total) * 100;
+        const part = el("div", { class: "part" + (t.darkInk ? " dark-ink" : ""), tabindex: 0,
+          style: `width:${pct}%;background:${t.color}` }, pct >= 9 ? `${Math.round(pct)}%` : "");
+        const enter = (evt) => showTip(evt, `${fmt(value)} prefixes · ${pct.toFixed(1)}%`,
+          `${shortLoc(loc.name)} · ${t.label} (IPv4 ${fmt(loc[t.key]["4"])}, IPv6 ${fmt(loc[t.key]["6"])})`);
+        part.addEventListener("pointermove", enter); part.addEventListener("focus", enter);
+        part.addEventListener("pointerleave", hideTip); part.addEventListener("blur", hideTip);
+        bar.append(part);
+      }
+      return el("div", { class: "exit-row" },
+        el("div", { class: "exit-head" }, el("strong", { text: shortLoc(loc.name) }), el("span", { class: "muted", text: `${fmt(loc.total)} prefixes` })),
+        bar);
+    });
+
+    // table view with all numbers
+    const table = el("table", { class: "data" },
+      el("thead", {}, el("tr", {}, el("th", { text: "Location" }),
+        ...used.map((t) => el("th", { class: "num" }, t.label, el("br"), "IPv4 / IPv6")),
+        el("th", { class: "num", text: "Total" }))),
+      el("tbody", {}, ...ex.locations.map((loc) => el("tr", {},
+        el("td", { text: shortLoc(loc.name) }),
+        ...used.map((t) => el("td", { class: "num", text: `${fmt(loc[t.key]["4"])} / ${fmt(loc[t.key]["6"])}` })),
+        el("td", { class: "num", text: fmt(loc.total) })))));
+
+    // peers / exchanges per location
+    const locCodes = ex.locations.map((l) => l.location).filter(Boolean);
+    const viaTable = ex.via.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+      el("thead", {}, el("tr", {}, el("th", { text: "Peer / exchange" }),
+        ...ex.locations.filter((l) => l.location).map((l) => el("th", { class: "num", text: shortLoc(l.name) })),
+        el("th", { class: "num", text: "Total" }))),
+      el("tbody", {}, ...ex.via.map((v) => el("tr", {},
+        el("td", {}, v.name || v.community, v.name ? el("span", { class: "cell-sub", text: v.community }) : null),
+        ...locCodes.map((c) => el("td", { class: "num", text: v.locations[c] ? fmt(v.locations[c]) : "–" })),
+        el("td", { class: "num", text: fmt(v.total) })))))) : el("div", { class: "muted small", text: "No routes with a peer community." });
+
+    // via transit although the origin AS is a direct peer
+    const tip = ex.transit_instead_of_peering;
+    let tipBox = null;
+    if (tip && tip.available) {
+      tipBox = el("div", {},
+        el("h3", { text: `Via transit although the origin AS is a direct peer · ${fmt(tip.total_prefixes)} prefixes` }),
+        el("p", { class: "explain", text: "These networks peer with you, but the listed prefixes are reached via transit: the peer does not announce them to you (or not at that location), or your policy prefers transit." +
+          (tip.ranked_by === "traffic" ? " Sorted by your outgoing traffic to the AS (Akvorado)." : " Sorted by prefix count; configure [akvorado] to sort by traffic.") }),
+        tip.asns.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+          el("thead", {}, el("tr", {}, ...["Origin AS", tip.ranked_by === "traffic" ? "Traffic ▼" : null, "Via transit", "Via peering", "Peering at", "Examples"]
+            .filter(Boolean).map((h) => el("th", { class: /Traffic|Via/.test(h) ? "num" : null, text: h,
+              title: h.startsWith("Traffic") ? "Average outgoing traffic to this AS (Akvorado)" : null })))),
+          el("tbody", {}, ...tip.asns.map((a) => el("tr", {},
+            el("td", {}, asLink(a.asn), a.name && a.name !== "(DNS Error)" ? el("span", { class: "cell-sub", text: a.name }) : null),
+            tip.ranked_by === "traffic" ? el("td", { class: "num", text: fmtBps(a.traffic_bps) }) : null,
+            el("td", { class: "num", text: fmt(a.prefixes_via_transit) }),
+            el("td", { class: "num", text: fmt(a.prefixes_via_peering) }),
+            el("td", { class: "small", text: a.peering_locations.map(shortLoc).join(", ") || "–" }),
+            el("td", {}, el("div", { class: "chips" }, ...a.samples.map((p) =>
+              el("a", { class: "chip", href: `#lookup=${encodeURIComponent(p.split("/")[0])}`, text: p }))))))))) 
+          : el("div", { class: "muted small", text: "None – every prefix of your peers is reached via peering." }));
+    }
+
+    fill(box, el("div", { class: "exits-grid" },
+      el("div", {},
+        el("h3", { text: "Exit by location" }),
+        el("div", { class: "legend" }, ...used.map((t) => el("span", { style: `--swatch:${t.color}`, text: t.label }))),
+        ...bars,
+        table),
+      el("div", {}, el("h3", { text: "Peers & exchanges by location" }), viaTable)),
+      tipBox ? el("div", { style: "margin-top:16px" }, tipBox) : null);
+  }
+
+  // ------------------------------------------------------------------ external view (RIPE RIS)
+  let externalProblems = 0;
+  async function refreshExternal() {
+    if (!CONFIG.risEnabled) return;
+    $("#externalCard").hidden = false;
+    let d, events = [];
+    try {
+      d = await getJSON(`${API}/external`);
+      events = await getJSON(`${API}/external/events?hours=168&limit=50`);
+    } catch (e) { return; }
+    $("#externalStatus").replaceChildren(stateBadge(d.connected ? "ok" : "warn",
+      d.connected ? `RIS Live connected${d.last_message ? ", last update " + timeAgo(d.last_message) : ""}` : `RIS Live disconnected${d.error ? ": " + d.error : ""}`));
+    externalProblems = d.prefixes.filter((p) => (p.foreign || []).length || ((p.visibility || {}).foreign_origins || []).length).length;
+    const rows = d.prefixes.map((p) => {
+      const vis = p.visibility || {};
+      const foreignOrigins = new Set([...(p.foreign || []).map((f) => f.origin_asn), ...(vis.foreign_origins || [])]);
+      const bad = foreignOrigins.size > 0;
+      const low = vis.ratio !== null && vis.ratio !== undefined && vis.ratio < 0.8;
+      return el("div", { class: "own-item" + (bad ? " problem" : "") },
+        el("div", { class: "own-head" }, lookupLink(p.prefix, p.prefix.split("/")[0]),
+          bad ? stateBadge("err", "Foreign origin seen") : low ? stateBadge("warn", "Low visibility")
+            : !d.connected && !vis.updated ? stateBadge("muted", "No data yet") : stateBadge("ok", "OK")),
+        el("div", { class: "detail" },
+          vis.ris_peers_seeing !== undefined && vis.ris_peers_seeing !== null
+            ? `Seen by ${fmt(vis.ris_peers_seeing)} of ${fmt(vis.total_ris_peers)} RIS peers (${Math.round((vis.ratio || 0) * 100)}%)`
+            : "Visibility: waiting for RIPEstat",
+          vis.origins && vis.origins.length ? ` · origins ${vis.origins.map((o) => "AS" + o).join(", ")}` : ""),
+        (p.foreign || []).length ? el("div", { class: "chips" }, ...p.foreign.map((f) =>
+          el("a", { class: "chip bad", href: `#lookup=AS${f.origin_asn}`, title: `path ${f.path.flat().join(" ")}` },
+            `${f.prefix} by AS${f.origin_asn}`, el("small", { text: `${f.peers} RIS peers` })))) : null);
+    });
+    fill($("#external"),
+      el("div", { class: "own-list" }, ...rows),
+      el("details", { class: "events" }, el("summary", { text: `Foreign announcements (last 7 days): ${events.filter((e) => e.type === "foreign_announcement").length}` }),
+        events.length ? el("ol", {}, ...events.map((e) => el("li", {},
+          el("time", { datetime: e.ts, text: shortTime(e.ts) }),
+          el("span", {}, stateBadge(e.type === "foreign_announcement" ? "err" : "ok",
+            `${e.prefix} by AS${e.origin_asn} ${e.type === "foreign_announcement" ? "announced" : "gone"}`),
+            el("span", { class: "cell-sub", text: (e.more_specific ? "more specific of " : "own prefix ") + e.own_prefix + (e.path ? ` · path ${e.path.flat().join(" ")}` : "") })))))
+          : el("div", { class: "muted small", text: "None." })));
+  }
+
+  // ------------------------------------------------------------------ peering suggestions
+  async function refreshPeering() {
+    if (!CONFIG.peeringdbEnabled) return;
+    $("#peeringCard").hidden = false;
+    let d;
+    try { d = await getJSON(`${API}/peering-suggestions`); } catch (e) { return; }
+    const box = $("#peering");
+    $("#peeringUpdated").textContent = d.updated ? `updated ${timeAgo(d.updated)}` : "";
+    if (!d.updated) {
+      fill(box, el("div", { class: d.error ? "error" : "muted", text: d.error ? `PeeringDB not reachable: ${d.error}` : "Waiting for the first PeeringDB query (runs after the table is learned)…" }));
+      return;
+    }
+    const byTraffic = d.ranked_by === "traffic";
+    fill(box,
+      d.error ? el("div", { class: "error", text: `Last refresh failed (showing previous result): ${d.error}` }) : null,
+      el("p", { class: "explain", text:
+        `Checked the top ${d.candidates_checked} networks directly behind your transit providers (${byTraffic ? "by outgoing traffic, Akvorado" : "by prefixes reached via transit"}). ` +
+        `${d.suggestions.length} share an exchange with you, ${d.no_common_ix} do not, ${d.not_in_peeringdb} are not in PeeringDB. ` +
+        `Your exchanges: ${d.own_ixes.map((ix) => ix.name).join(", ") || "none found for AS" + CONFIG.asn}.` }),
+      d.suggestions.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+        el("thead", {}, el("tr", {}, ...["Network", byTraffic ? "Traffic" : null, "Prefixes via transit", "Policy", "Common exchanges", ""]
+          .filter((h) => h !== null).map((h) => el("th", { class: /Traffic|Prefixes/.test(h) ? "num" : null, text: h })))),
+        el("tbody", {}, ...d.suggestions.map((sg) => el("tr", {},
+          el("td", {}, asLink(sg.asn), el("span", { class: "cell-sub", text: [sg.name, sg.type].filter(Boolean).join(" · ") })),
+          byTraffic ? el("td", { class: "num", text: fmtBps(sg.traffic_bps) }) : null,
+          el("td", { class: "num" }, el("a", { href: `#list=${sg.asn}/transit`, text: fmt(sg.prefixes_via_transit) })),
+          el("td", { text: sg.policy || "–" }),
+          el("td", {}, el("div", { class: "chips" }, ...sg.common_ixes.map((ix) =>
+            el("span", { class: "chip", title: ix.route_server ? "peers with the route server" : "no route server session" },
+              ix.name || `IX ${ix.ix_id}`, ix.route_server ? el("small", { text: "RS" }) : null)))),
+          el("td", {}, el("a", { href: sg.peeringdb_url, target: "_blank", rel: "noopener", text: "PeeringDB" })))))))
+        : el("div", { class: "muted small", text: "No network behind your transits is present at one of your exchanges." }));
+  }
+
+  // ------------------------------------------------------------------ rpki
+  async function refreshRpki() {
+    if (!CONFIG.rpkiEnabled) return;
+    $("#rpkiCard").hidden = false;
+    let d;
+    try { d = await getJSON(`${API}/rpki`); } catch (e) { return; }
+    const box = $("#rpki");
+    $("#rpkiUpdated").textContent = d.updated ? `validated ${timeAgo(d.updated)} · ${fmt(d.vrps)} VRPs` : "";
+    if (!d.counts) {
+      fill(box, el("div", { class: d.error ? "error" : "muted", text: d.error ? `Routinator not reachable: ${d.error}` : "Loading VRPs…" }));
+      return;
+    }
+    const total = (s) => d.counts[s]["4"] + d.counts[s]["6"];
+    const all = Math.max(1, total("valid") + total("invalid") + total("not-found"));
+    const parts = [
+      { key: "valid", color: "var(--good)" }, { key: "invalid", color: "var(--critical)" },
+      { key: "not-found", color: "var(--text-muted)" }];
+    const bar = el("div", { class: "share", role: "img", "aria-label": parts.map((p) => `${RPKI_LABELS[p.key]}: ${fmt(total(p.key))}`).join(", ") },
+      ...parts.filter((p) => total(p.key)).map((p) => {
+        const pct = (total(p.key) / all) * 100;
+        return el("div", { class: "part", style: `width:${pct}%;background:${p.color}` }, pct >= 8 ? `${Math.round(pct)}%` : "");
+      }));
+    fill(box,
+      d.error ? el("div", { class: "error", text: `Last refresh failed (showing previous result): ${d.error}` }) : null,
+      el("div", { class: "rpki-summary" }, ...parts.map((p) => el("div", {},
+        stateBadge(RPKI_LEVEL[p.key], RPKI_LABELS[p.key]),
+        el("div", { class: "value", text: fmt(total(p.key)) }),
+        el("div", { class: "muted small", text: `IPv4 ${fmt(d.counts[p.key]["4"])} · IPv6 ${fmt(d.counts[p.key]["6"])}` })))),
+      bar,
+      el("h3", { text: `Invalid routes (${fmt(d.invalid_total)})`, style: "font-size:13px;margin:14px 0 6px;color:var(--text-secondary)" }),
+      d.invalid.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
+        el("thead", {}, el("tr", {}, ...["Prefix", "Origin AS", "Reason", "Next-hop AS", "Covering ROAs"].map((h) => el("th", { text: h })))),
+        el("tbody", {}, ...d.invalid.map((i) => el("tr", {},
+          el("td", {}, lookupLink(i.prefix, i.prefix.split("/")[0])),
+          el("td", {}, asLink(i.origin_asn), i.origin_name && i.origin_name !== "(DNS Error)" ? el("span", { class: "cell-sub", text: i.origin_name }) : null),
+          el("td", { class: "small", text: RPKI_REASON[i.reason] || i.reason }),
+          el("td", { class: "num" }, i.nexthop_asn === null || i.nexthop_asn === undefined ? "–" : asLink(i.nexthop_asn)),
+          el("td", {}, vrpChips(i.vrps)))))))
+        : el("div", { class: "muted small", text: "No invalid routes." }),
+      d.invalid_total > d.invalid.length ? el("div", { class: "pager", text: `Showing ${d.invalid.length} of ${fmt(d.invalid_total)}.` }) : null);
   }
 
   // ------------------------------------------------------------------ data refresh
@@ -503,6 +740,9 @@
     columnChart($("#cidr4"), s.cidr_breakdown.filter((c) => c.ip_version === 4), "IPv4 prefixes per prefix length");
     columnChart($("#cidr6"), s.cidr_breakdown.filter((c) => c.ip_version === 6), "IPv6 prefixes per prefix length");
     renderUnstable(s);
+    renderExits(s);
+    refreshRpki();
+    refreshPeering();
   }
 
   async function refresh() {
@@ -520,9 +760,11 @@
         renderAdvanced(s);
       }
       await refreshSessions();
+      refreshExternal();
       const age = s.basic_updated ? (Date.now() - new Date(s.basic_updated).getTime()) / 1000 : Infinity;
       const problems = [];
       if (sessions && sessions.summary.down) problems.push(`${sessions.summary.down} session${sessions.summary.down > 1 ? "s" : ""} down`);
+      if (externalProblems) problems.push(`${externalProblems} prefix${externalProblems > 1 ? "es" : ""} with foreign origin (RIS)`);
       if (s.own_prefix_problems) problems.push(`${s.own_prefix_problems} own prefix problem${s.own_prefix_problems > 1 ? "s" : ""}`);
       if (!s.ready) setStatus("warn", "Computing statistics…");
       else if (problems.length) setStatus("err", problems.join(" · "));
@@ -592,6 +834,7 @@
           ["Cluster list", (r.cluster_list || []).join(", ") || null],
           r.aggregator_as ? ["Aggregator", `AS${r.aggregator_as} ${r.aggregator_address || ""}`] : null,
           r.atomic_aggregate ? ["Atomic aggregate", "yes"] : null,
+          r.rpki ? ["RPKI", el("div", {}, rpkiBadge(r.rpki), r.rpki.vrps && r.rpki.vrps.length ? vrpChips(r.rpki.vrps) : null)] : null,
           ["Last change", r.age],
         ]),
         historyBox,

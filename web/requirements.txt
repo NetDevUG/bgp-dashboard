@@ -1,5 +1,8 @@
-fastapi>=0.115,<1
-uvicorn[standard]>=0.32,<1
-jinja2>=3.1,<4
-pymongo>=4.13,<5
-dnspython>=2.7,<3
+# Exact versions for reproducible images; bump deliberately and run the tests.
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+jinja2==3.1.6
+pymongo==4.20.1
+dnspython==2.9.2
+httpx==0.28.1
+websockets==17.4

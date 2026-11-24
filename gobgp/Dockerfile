@@ -1,13 +1,19 @@
-# --- Build GoBGP from source (works for amd64 and arm64) --------------------
-FROM golang:1.25-bookworm AS gobgp-build
+# --- Build GoBGP from source ---------------------------------------------------
+# Runs on the build machine and cross-compiles for the target (amd64, arm64, ...)
+FROM --platform=$BUILDPLATFORM golang:1.26 AS gobgp-build
 ARG GOBGP_VERSION=4.11.0
-ENV CGO_ENABLED=0 GOBIN=/out
-RUN go install -trimpath -ldflags="-s -w" \
+ARG TARGETOS=linux
+ARG TARGETARCH
+ENV CGO_ENABLED=0
+RUN GOOS=$TARGETOS GOARCH=${TARGETARCH:-$(go env GOARCH)} go install -trimpath -ldflags="-s -w" \
         github.com/osrg/gobgp/v4/cmd/gobgp@v${GOBGP_VERSION} \
-        github.com/osrg/gobgp/v4/cmd/gobgpd@v${GOBGP_VERSION}
+        github.com/osrg/gobgp/v4/cmd/gobgpd@v${GOBGP_VERSION} && \
+    mkdir -p /out && \
+    if [ -d "/go/bin/${TARGETOS}_${TARGETARCH}" ]; then cp /go/bin/${TARGETOS}_${TARGETARCH}/* /out/; \
+    else cp /go/bin/gobgp /go/bin/gobgpd /out/; fi
 
 # --- Runtime ------------------------------------------------------------------
-FROM python:3.13-slim
+FROM python:3.15-slim
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 COPY --from=gobgp-build /out/gobgp /out/gobgpd /usr/local/bin/
 COPY requirements.txt /tmp/requirements.txt

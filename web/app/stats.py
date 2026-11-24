@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from .config import Settings
 from .dns_cache import DnsCache
+from .exits import exit_analysis
 from .monitoring import check_own_prefixes, unstable_prefixes
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ ACTIVE = {"active": True}
 TREND_KEYS = (
     "peer_count", "ipv4_table_size", "ipv6_table_size", "nexthop_ip_count",
     "avg_as_path_length", "customer_count", "customer_ipv4_prefixes", "customer_ipv6_prefixes",
+    "own_ipv4_prefixes", "own_ipv6_prefixes", "route_changes_1h",
 )
 
 
@@ -33,7 +35,9 @@ def _timestamp() -> str:
 
 
 class StatsService:
-    def __init__(self, db, settings: Settings, dns: DnsCache):
+    def __init__(self, db, settings: Settings, dns: DnsCache, rpki=None, akvorado=None):
+        self.rpki = rpki
+        self.akvorado = akvorado
         self.db = db
         self.coll = db["bgp"]
         self.settings = settings
@@ -55,8 +59,13 @@ class StatsService:
             "customer_count": 0,
             "customer_ipv4_prefixes": 0,
             "customer_ipv6_prefixes": 0,
+            "customers_enabled": bool(settings.customer_community),
+            "own_ipv4_prefixes": 0,
+            "own_ipv6_prefixes": 0,
+            "route_changes_1h": 0,
             "transit_percentage": None,
             "own_prefixes": [],
+            "exits": {"configured": False},
             "own_prefix_problems": 0,
             "unstable": {"window_hours": settings.unstable_window_hours, "route_changes": 0,
                          "route_changes_1h": 0, "changed_prefixes": 0, "unstable_prefixes": 0,
@@ -106,10 +115,14 @@ class StatsService:
             self.coll.distinct("nexthop", ACTIVE),
         )
         self.peer_asns = set(peers)
-        own = await check_own_prefixes(self.coll, self.settings)
+        own = await check_own_prefixes(self.coll, self.settings, rpki=self.rpki)
+        own_v4, own_v6 = await asyncio.gather(*(
+            self.coll.count_documents({**self.own_filter(), "ip_version": v}) for v in (4, 6)))
         self.data.update(
             own_prefixes=own,
             own_prefix_problems=sum(1 for p in own if not p["ok"]),
+            own_ipv4_prefixes=own_v4,
+            own_ipv6_prefixes=own_v6,
             peer_count=len(peers),
             ipv4_table_size=v4,
             ipv6_table_size=v6,
@@ -189,16 +202,26 @@ class StatsService:
              for r in rows if r["_id"] is not None),
             key=lambda c: c["community"])
 
+    def own_filter(self) -> dict:
+        """Routes originated in the own AS: tagged with the originated community or empty AS path."""
+        if self.settings.originated_community:
+            return {"communities": self.settings.originated_community, "active": True}
+        return {"origin_asn": None, "active": True}
+
     async def customer_asns(self) -> list[int | None]:
+        if not self.settings.customer_community:
+            return []
         return await self.coll.distinct(
             "nexthop_asn", {"communities": self.settings.customer_community, "active": True})
 
     async def update_advanced_stats(self) -> None:
         started = time.monotonic()
-        nexthop_rows, cidrs, avg_len, communities, customer_asns, unstable = await asyncio.gather(
+        nexthop_rows, cidrs, avg_len, communities, customer_asns, unstable, exits = await asyncio.gather(
             self.nexthop_breakdown(), self.cidrs(), self.avg_as_path_len(),
             self.communities_count(), self.customer_asns(),
-            unstable_prefixes(self.coll, self.settings, self.dns))
+            unstable_prefixes(self.coll, self.settings, self.dns),
+            exit_analysis(self.coll, self.settings, self.dns,
+                          traffic=self.akvorado.traffic() if self.akvorado else None))
 
         by_nexthop = {row["_id"]: row for row in nexthop_rows}
         relevant = list(set(by_nexthop) | set(customer_asns))
@@ -240,6 +263,8 @@ class StatsService:
             customer_ipv6_prefixes=sum(c["ipv6_origin_count"] for c in customers),
             transit_percentage=round(transit / total * 100, 1) if total else None,
             unstable=unstable,
+            route_changes_1h=unstable["route_changes_1h"],
+            exits=exits,
             timestamp=_timestamp(),
             advanced_updated=datetime.now(timezone.utc).isoformat(),
         )

@@ -36,7 +36,7 @@ def prefix_range(net: ipaddress.IPv4Network | ipaddress.IPv6Network) -> tuple[st
 # --------------------------------------------------------------------------- #
 # Own prefixes
 # --------------------------------------------------------------------------- #
-async def check_own_prefixes(coll, settings: Settings) -> list[dict]:
+async def check_own_prefixes(coll, settings: Settings, rpki=None) -> list[dict]:
     """Check every configured own prefix.
 
     Problems:
@@ -91,7 +91,15 @@ async def check_own_prefixes(coll, settings: Settings) -> list[dict]:
             if any(not m["allowed"] for m in more_specifics):
                 problems.append("foreign_more_specific")
 
-        results.append({"prefix": prefix, "ok": not problems, "problems": problems,
+        rpki_state = None
+        if rpki is not None and rpki.index is not None:
+            origin = route["origin_asn"] if route else settings.asn
+            rpki_state = rpki.route_state(prefix, origin)
+            if rpki_state["state"] == "invalid":
+                problems.append("rpki_invalid")
+            elif rpki_state["state"] == "not-found":
+                problems.append("rpki_not_found")
+        results.append({"prefix": prefix, "ok": not problems, "problems": problems, "rpki": rpki_state,
                         "route": route, "more_specifics": more_specifics})
     return results
 

@@ -13,6 +13,7 @@ services:
       MONGO_URI: mongodb://mongodb:27017
       GOBGP_CONFIG_AUTO_RELOAD: "true"
       MAX_PREFIX_HISTORY: "100"
+      INACTIVE_PREFIX_DAYS: "30"     # delete prefixes withdrawn longer than this, 0 = never
       NEIGHBOR_POLL_INTERVAL: "10"   # seconds, 0 = no BGP session monitoring
       NEIGHBOR_EVENT_DAYS: "90"
       LOG_LEVEL: INFO
@@ -46,6 +47,10 @@ services:
     environment:
       MONGO_URI: mongodb://mongodb:27017
       LOG_LEVEL: INFO
+      # optional secrets, set them in .env (never in dashboard.toml)
+      AKVORADO_CLICKHOUSE_USER: ${AKVORADO_CLICKHOUSE_USER:-}
+      AKVORADO_CLICKHOUSE_PASSWORD: ${AKVORADO_CLICKHOUSE_PASSWORD:-}
+      PEERINGDB_API_KEY: ${PEERINGDB_API_KEY:-}
     depends_on:
       mongodb:
         condition: service_healthy

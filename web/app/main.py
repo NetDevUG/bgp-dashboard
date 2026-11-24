@@ -22,6 +22,10 @@ from .dns_cache import DnsCache
 from .lookups import InvalidQuery, Lookups
 from . import monitoring
 from .metrics import render_metrics
+from .akvorado import AkvoradoService
+from .peeringdb import PeeringDBService
+from .ris import RisLiveService
+from .rpki import RpkiService
 from .stats import StatsService
 
 log = logging.getLogger("bgp_dashboard")
@@ -45,22 +49,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                   serverSelectionTimeoutMS=5000, appname="bgp-dashboard")
         db = client[settings.mongo_db]
         dns = DnsCache(db, timeout=settings.dns_timeout)
-        stats = StatsService(db, settings, dns)
+        rpki = RpkiService(settings, dns)
+        akvorado = AkvoradoService(settings)
+        stats = StatsService(db, settings, dns, rpki=rpki, akvorado=akvorado)
         app.state.client, app.state.db = client, db
-        app.state.dns, app.state.stats = dns, stats
-        app.state.lookups = Lookups(db, settings, dns)
+        app.state.dns, app.state.stats, app.state.rpki = dns, stats, rpki
+        app.state.akvorado = akvorado
+        peeringdb = PeeringDBService(db, settings, dns, akvorado=akvorado)
+        app.state.peeringdb = peeringdb
+        ris = RisLiveService(db, settings)
+        app.state.ris = ris
+        app.state.lookups = Lookups(db, settings, dns, rpki=rpki)
 
-        task = None
+        tasks = []
         if settings.background_jobs:
             with contextlib.suppress(Exception):
                 await dns.ensure_indexes()
                 await stats.ensure_indexes()
-            task = asyncio.create_task(stats.run(), name="stats-refresh")
+            if rpki.enabled:
+                tasks.append(asyncio.create_task(rpki.run(), name="rpki-refresh"))
+            if akvorado.enabled:
+                tasks.append(asyncio.create_task(akvorado.run(), name="akvorado-refresh"))
+            tasks.append(asyncio.create_task(stats.run(), name="stats-refresh"))
+            if ris.enabled:
+                tasks.append(asyncio.create_task(ris.run(), name="ris-live"))
+            if peeringdb.enabled:
+                tasks.append(asyncio.create_task(peeringdb.run(stats), name="peeringdb-refresh"))
         try:
             yield
         finally:
-            if task:
+            for task in tasks:
                 task.cancel()
+            for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             await client.close()
@@ -107,12 +127,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "config": {
                 "asn": settings.asn,
                 "customerCommunity": settings.customer_community,
+                "customersEnabled": bool(settings.customer_community),
                 "transitCommunity": settings.transit_community,
                 "peerCommunityPrefix": settings.peer_community_prefix,
                 "statsInterval": settings.stats_interval,
                 "advancedInterval": settings.advanced_stats_interval,
                 "historyDays": settings.stats_history_days,
                 "ownPrefixesConfigured": len(settings.own_prefixes),
+                "exitsConfigured": bool(settings.location_community_prefix or settings.peer_learned_community),
+                "rpkiEnabled": bool(settings.rpki_vrp_url),
+                "akvoradoEnabled": bool(settings.akvorado_clickhouse_url),
+                "peeringdbEnabled": settings.peeringdb_enabled,
+                "risEnabled": settings.ris_live_enabled and bool(settings.own_prefixes),
             },
         })
 
@@ -183,6 +209,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Prefixes with the most route changes in the configured window."""
         return st(request).data["unstable"]
 
+    @app.get(f"{API}/exits", tags=["monitoring"])
+    async def get_exits(request: Request):
+        """Where (location) and how (transit / peering / own) prefixes leave the network."""
+        return st(request).data["exits"]
+
+    @app.get(f"{API}/rpki", tags=["monitoring"])
+    async def get_rpki(request: Request):
+        """RPKI route origin validation of all active routes (Routinator VRPs)."""
+        return request.app.state.rpki.data
+
+    @app.get(f"{API}/external", tags=["monitoring"])
+    async def get_external(request: Request):
+        """Own prefixes as seen by the RIPE RIS route collectors (RIS Live + RIPEstat)."""
+        return request.app.state.ris.summary()
+
+    @app.get(f"{API}/external/events", tags=["monitoring"])
+    async def get_external_events(request: Request, hours: float = Query(168, gt=0, le=24 * 366),
+                                  limit: int = Query(200, ge=1, le=5000)):
+        """Foreign announcements of the own prefixes seen by RIS Live (start and end)."""
+        return await request.app.state.ris.events(hours, limit)
+
+    @app.get(f"{API}/peering-suggestions", tags=["monitoring"])
+    async def get_peering_suggestions(request: Request):
+        """Networks behind your transits that share an internet exchange with you (PeeringDB)."""
+        return request.app.state.peeringdb.data
+
+    @app.get(f"{API}/akvorado", tags=["monitoring"])
+    async def get_akvorado(request: Request):
+        """Status of the Akvorado traffic data (top destination ASNs by outgoing traffic)."""
+        return request.app.state.akvorado.data
+
     @app.get("/metrics", response_class=PlainTextResponse, tags=["monitoring"])
     async def metrics(request: Request):
         """Prometheus metrics."""
@@ -193,7 +250,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             collector = await monitoring.collector_status(db)
         except Exception:  # noqa: BLE001 - still export the cached statistics
             sessions, collector = {}, {}
-        text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector)
+        akv = request.app.state.akvorado
+        extra = []
+        if akv.enabled:
+            extra = [("bgp_akvorado_ok", akv.data["ok"], None, "1 if the last Akvorado query succeeded"),
+                     ("bgp_akvorado_outgoing_bps", float(akv.data["total_bps"]), None,
+                      "Average outgoing external traffic in the Akvorado window")]
+        pdb = request.app.state.peeringdb
+        if pdb.enabled:
+            extra += [("bgp_peeringdb_ok", pdb.data["ok"], None, "1 if the last PeeringDB refresh succeeded"),
+                      ("bgp_peering_suggestions", len(pdb.data["suggestions"]), None,
+                       "Networks behind the transits that share an internet exchange with you")]
+        ris = request.app.state.ris
+        if ris.enabled:
+            summary = ris.summary()
+            extra.append(("bgp_ris_live_connected", summary["connected"], None,
+                          "1 if the RIS Live WebSocket is connected"))
+            if ris.last_message:
+                extra.append(("bgp_ris_live_last_message_timestamp_seconds", ris.last_message.timestamp(),
+                              None, "Time of the last RIS Live update for the own prefixes"))
+            for p in summary["prefixes"]:
+                vis = p["visibility"] or {}
+                foreign = {f["origin_asn"] for f in p["foreign"]} | set(vis.get("foreign_origins") or [])
+                extra.append(("bgp_external_foreign_origins", len(foreign), {"prefix": p["prefix"]},
+                              "Foreign origin ASNs announcing the own prefix or a more specific (RIPE RIS)"))
+                if vis.get("ratio") is not None:
+                    extra.append(("bgp_external_visibility_ratio", float(vis["ratio"]), {"prefix": p["prefix"]},
+                                  "Share of RIS peers that see the own prefix (RIPEstat)"))
+        text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector,
+                              rpki=request.app.state.rpki.data, extra=extra)
         return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # ------------------------------------------------------------------ #

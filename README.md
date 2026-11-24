@@ -12,6 +12,8 @@ A "realtime" web view of your BGP network
 - Are all BGP sessions up? When did they flap and why?
 - Are my own prefixes visible, with the right origin AS – or is someone announcing (parts of) them?
 - Which prefixes are unstable (flapping, path changes)?
+- Where (location) and how (transit / peering) do prefixes leave the network? Which peers'
+  prefixes are still reached via transit?
 - Prometheus metrics and ready-made alert rules
 
 
@@ -29,6 +31,8 @@ How it works
   which writes the routes to MongoDB in batches (one `bulk_write` per batch, keeps up with a full table).
 - Every prefix is one document. When the attributes of a prefix change, the previous version is
   kept in its `history` (newest first, `MAX_PREFIX_HISTORY` entries, default 100).
+- Prefixes that have been inactive for `INACTIVE_PREFIX_DAYS` (default 30) are deleted by MongoDB
+  (TTL index), so the database does not grow with every prefix ever seen.
 - If `gobgpd` or the collector dies, the container exits and Docker restarts it. On start all
   stored prefixes are marked inactive and the RIB is learned again.
 - Every 10s the collector also reads `gobgp neighbor -j` and stores the state of all BGP sessions
@@ -91,6 +95,76 @@ The collector records the time of every real route change (attribute change, wit
 re-announce; not the re-learning after a restart). The dashboard lists the prefixes with the most
 changes in the last `unstable_window_hours` (default 24h) plus the total churn.
 
+###### Exits
+If your routers tag routes on import with communities for the location and the kind of
+neighbor, the dashboard shows per location how many prefixes leave via transit, peering or are
+originated locally, which peers/exchanges deliver how many prefixes where, and which prefixes of
+direct peers are still reached via transit (the peer does not announce them to you, or your
+policy prefers transit). Configure it in `config/dashboard.toml`:
+```toml
+[network]
+transit_community = "216333:100:100"
+peer_community_prefix = "216333:101:"          # which peer / exchange
+[exits]
+location_community_prefix = "216333:105:"      # where the route was learned
+peer_learned_community = "216333:100:120"
+originated_community = "216333:100:130"
+```
+Only the best path per prefix is known: RouterOS sends only active paths, also with BGP
+Add-Path, so backup paths are not visible.
+
+###### External view (RIPE RIS)
+The own-prefix check above only sees what your routers learn. With `[ris_live] enabled = true` the
+dashboard also watches your `own_prefixes` and all their more specifics as seen by the RIPE RIS route
+collectors (hundreds of BGP sessions worldwide):
+- **RIS Live** (WebSocket, real time): an announcement with an origin AS other than yours (or one in
+  `allowed_origins`) is reported immediately and stored as event, including when it disappears again.
+- **RIPEstat routing-status** (every 15 minutes): how many RIS peers see your prefix and which origins
+  it currently has.
+
+Alerts: `BGPExternalForeignOrigin` (possible hijack), `BGPExternalVisibilityLow`,
+`BGPRISLiveDisconnected`. Needs outgoing HTTPS/WSS access to `ris-live.ripe.net` and `stat.ripe.net`.
+
+###### Akvorado (optional)
+If you run [Akvorado](https://github.com/akvorado/akvorado), the dashboard reads the outgoing
+traffic per destination AS (flows leaving through external interfaces, last 24 h) from its
+ClickHouse and ranks "via transit although the origin AS is a direct peer" and the peering
+suggestions by traffic instead of prefix counts:
+```toml
+[akvorado]
+clickhouse_url = "http://akvorado.example.net:8123/"   # ClickHouse HTTP interface
+table = "flows_5m0s"                                    # consolidated 5-minute table (default)
+```
+User and password go into `.env` (`AKVORADO_CLICKHOUSE_USER`, `AKVORADO_CLICKHOUSE_PASSWORD`); a user
+with `SELECT` on the Akvorado database is enough. The ClickHouse port of the Akvorado compose setup
+has to be reachable from the dashboard host.
+
+###### Peering opportunities (PeeringDB)
+The networks directly behind your transit providers (second AS of the transit routes) that are not
+direct peers yet are checked in PeeringDB every 12 hours: the card lists those that are present at
+one of your internet exchanges, with their peering policy, whether they use the route server and
+how many prefixes (with Akvorado: how much traffic) you currently reach via transit through them.
+```toml
+[peeringdb]
+enabled = true
+candidates = 50      # networks checked, ranked by traffic (Akvorado) or prefixes
+```
+Needs HTTPS access to `www.peeringdb.com`; an API key (`PEERINGDB_API_KEY` in `.env`) raises the
+rate limit but is not required. Results are cached in MongoDB.
+
+###### RPKI
+With an RPKI validator (Routinator, rpki-client) every active route is validated (RFC 6811) every
+15 minutes: totals of valid / invalid / not-found routes, a list of all invalid routes with the
+reason (origin AS not authorised, or more specific than the ROA allows) and the covering ROAs,
+the RPKI state in the looking glass and an RPKI check of your own prefixes (ROA missing or not
+matching). Configure the JSON export of the validator:
+```toml
+[rpki]
+vrp_url = "http://routinator.example.net:8323/json"   # Routinator: http-listen must be enabled
+```
+The index of about 750,000 VRPs needs roughly 100 MB of memory, plus about 250 MB for a few
+seconds while the export is loaded. Validating 1 million routes takes about 3 seconds.
+
 ###### Prometheus
 Scrape `http://<host>/metrics` (example in [monitoring/prometheus-scrape.yml](monitoring/prometheus-scrape.yml))
 and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.yml):
@@ -101,12 +175,14 @@ and load the alert rules from [monitoring/bgp-alerts.yml](monitoring/bgp-alerts.
 | `BGPSessionFlapping` | ≥ 3 session drops within an hour |
 | `BGPSessionPrefixesDropped` | a session lost more than half of its accepted prefixes |
 | `BGPOwnPrefixMissing` / `…WrongOrigin` / `…ForeignMoreSpecific` | see *Own prefixes* |
+| `BGPExternalForeignOrigin`, `BGPExternalVisibilityLow`, `BGPRISLiveDisconnected` | own prefix announced by a foreign AS somewhere on the Internet, low global visibility, RIS Live not connected |
+| `BGPOwnPrefixRPKINotValid`, `BGPRPKIDataStale` | own prefix without matching ROA, validator not reachable |
 | `BGPTableSizeDrop` | the IPv4/IPv6 table shrank by more than 10 % within an hour |
 | `BGPHighRouteChurn` | unusually many route changes |
 | `BGPCollectorDown`, `BGPNeighborPollFailing`, `BGPDashboardStatsStale`, `BGPDashboardDown` | the dashboard itself has a problem |
 
 Test the rules with `promtool test rules monitoring/bgp-alerts.test.yml`.
-Main metrics: `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
+Main metrics: `bgp_external_foreign_origins`, `bgp_external_visibility_ratio`, `bgp_rpki_routes`, `bgp_own_prefix_rpki_valid`, `bgp_exit_prefixes`, `bgp_transit_instead_of_peering_prefixes`, `bgp_session_up`, `bgp_session_drops_total`, `bgp_session_prefixes_accepted`,
 `bgp_own_prefix_ok`, `bgp_prefixes`, `bgp_peer_prefixes`, `bgp_route_changes`,
 `bgp_unstable_prefixes`, `bgp_collector_heartbeat_timestamp_seconds`.
 
@@ -131,6 +207,9 @@ Configuration changes never need a rebuild (`docker compose build` is only neede
 | `gobgp/gobgpd.conf` | BGP sessions | automatically on save (GoBGP config auto-reload) |
 | `config/dashboard.toml` | own ASN, customer/transit/peer communities, community names, refresh intervals | `docker compose restart web` |
 
+Without customers leave `customer_community` empty: instead of the customer tiles the dashboard
+then shows your own (originated) IPv4/IPv6 prefixes and the route changes of the last hour.
+
 Environment variables (see `docker-compose.yml`):
 
 | Variable | Default | |
@@ -139,6 +218,7 @@ Environment variables (see `docker-compose.yml`):
 | `MONGO_VERSION` | `8` | MongoDB image tag |
 | `MONGO_CACHE_GB` | `1` | WiredTiger cache size |
 | `MAX_PREFIX_HISTORY` | `100` | Versions kept per prefix (`0` = unlimited) |
+| `INACTIVE_PREFIX_DAYS` | `30` | Prefixes withdrawn / not re-learned for this many days are deleted incl. history (`0` = never) |
 | `NEIGHBOR_POLL_INTERVAL` | `10` | Seconds between BGP session polls (`0` = off) |
 | `NEIGHBOR_EVENT_DAYS` | `90` | Days session events are kept |
 | `GOBGP_CONFIG_AUTO_RELOAD` | `true` | Apply changes of `gobgpd.conf` without restart |
@@ -178,7 +258,32 @@ API
 | `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
 | `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
 | `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /bgp/api/v1.0/external` / `external/events` | own prefixes as seen by RIPE RIS, foreign announcements |
+| `GET /bgp/api/v1.0/peering-suggestions` | networks behind your transits at your exchanges |
+| `GET /bgp/api/v1.0/akvorado` | status of the Akvorado traffic data, top destination ASNs |
+| `GET /bgp/api/v1.0/rpki` | RPKI validation summary and invalid routes |
+| `GET /bgp/api/v1.0/exits` | exits by location and type, peers by location, transit although peered |
 | `GET /metrics` | Prometheus metrics |
+
+
+Prebuilt images and CI
+---------
+GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the tests (Python 3.15,
+MongoDB 8) and the Prometheus rule tests on every push and pull request and builds both images for
+`linux/amd64` and `linux/arm64`. Pushes to `master` and tags `v*` publish them to the GitHub
+Container Registry:
+
+```
+$ docker compose -f docker-compose.yml -f docker-compose.images.yml pull
+$ docker compose -f docker-compose.yml -f docker-compose.images.yml up -d
+```
+(or `COMPOSE_FILE=docker-compose.yml:docker-compose.images.yml` in `.env`; `BGP_DASHBOARD_TAG`
+selects `latest`, a release such as `1.2.0` or `sha-<commit>`). Packages of an organisation start
+as private: make them public in the package settings or run `docker login ghcr.io` first.
+
+Dependabot opens weekly pull requests for new Python packages, base images and GitHub Actions; CI
+shows right away whether they work. The GoBGP version (`GOBGP_VERSION` in `gobgp/Dockerfile`) is
+not covered by Dependabot and has to be raised by hand.
 
 
 Development

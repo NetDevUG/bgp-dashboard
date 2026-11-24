@@ -55,7 +55,8 @@ class Exposition:
 
 
 def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str | None,
-                   sessions: dict, collector: dict) -> str:
+                   sessions: dict, collector: dict, rpki: dict | None = None,
+                   extra: list | None = None) -> str:
     m = Exposition()
     m.add("bgp_dashboard_info", 1, {"asn": settings.asn}, help="Dashboard information")
     m.add("bgp_stats_ready", ready, help="1 once the first statistics run finished")
@@ -72,10 +73,14 @@ def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str
         m.add("bgp_nexthop_addresses", stats["nexthop_ip_count"], help="Unique next-hop addresses")
         m.add("bgp_as_path_length_avg", float(stats["avg_as_path_length"]),
               help="Average AS path length (prepends ignored)")
-        m.add("bgp_customers", stats["customer_count"], help="Number of customer ASNs")
+        if settings.customer_community:
+            m.add("bgp_customers", stats["customer_count"], help="Number of customer ASNs")
+            for v in (4, 6):
+                m.add("bgp_customer_prefixes", stats[f"customer_ipv{v}_prefixes"], {"ip_version": v},
+                      help="Prefixes originated by customers")
         for v in (4, 6):
-            m.add("bgp_customer_prefixes", stats[f"customer_ipv{v}_prefixes"], {"ip_version": v},
-                  help="Prefixes originated by customers")
+            m.add("bgp_own_prefixes", stats[f"own_ipv{v}_prefixes"], {"ip_version": v},
+                  help="Prefixes originated in the own AS")
         if stats.get("transit_percentage") is not None:
             m.add("bgp_transit_ratio", stats["transit_percentage"] / 100,
                   help="Share of prefixes tagged with the transit community")
@@ -100,6 +105,23 @@ def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str
               {"window": f"{unstable['window_hours']}h", "min_changes": unstable["min_changes"]},
               help="Prefixes with at least min_changes changes in the window")
 
+        exits = stats.get("exits") or {}
+        if exits.get("configured"):
+            for loc in exits["locations"]:
+                for kind in exits["types"]:
+                    for v in ("4", "6"):
+                        m.add("bgp_exit_prefixes", loc[kind][v],
+                              {"location": loc["name"], "type": kind, "ip_version": v},
+                              help="Active prefixes by exit location and route type")
+            for peer in exits["via"]:
+                m.add("bgp_peer_community_prefixes", peer["total"],
+                      {"community": peer["community"], "name": peer["name"] or ""},
+                      help="Active prefixes per peer/exchange community")
+            tip = exits["transit_instead_of_peering"]
+            if tip["available"]:
+                m.add("bgp_transit_instead_of_peering_prefixes", tip["total_prefixes"],
+                      help="Prefixes reached via transit although their origin AS is a direct peer")
+
         for p in stats["own_prefixes"]:
             labels = {"prefix": p["prefix"]}
             m.add("bgp_own_prefix_ok", p["ok"], labels, help="1 if the own prefix has no problem")
@@ -108,9 +130,27 @@ def render_metrics(settings: Settings, stats: dict, ready: bool, last_error: str
                   help="1 if the own prefix is in the table")
             m.add("bgp_own_prefix_origin_ok", bool(p["route"] and p["route"]["origin_ok"]), labels,
                   help="1 if the own prefix is originated by an allowed AS")
+            if p.get("rpki"):
+                m.add("bgp_own_prefix_rpki_valid", p["rpki"]["state"] == "valid", labels,
+                      help="1 if the own prefix is RPKI valid (ROA covers prefix and origin)")
             m.add("bgp_own_prefix_foreign_more_specifics",
                   sum(1 for x in p["more_specifics"] if not x["allowed"]), labels,
                   help="More specific prefixes announced by foreign origin ASNs")
+
+    # RPKI
+    if rpki and rpki.get("enabled"):
+        m.add("bgp_rpki_ok", rpki.get("ok", False), help="1 if the last VRP refresh succeeded")
+        m.add("bgp_rpki_vrps", rpki.get("vrps", 0), help="VRPs loaded from the validator")
+        m.add("bgp_rpki_last_update_timestamp_seconds", _ts(rpki.get("updated")),
+              help="Time of the last successful RPKI validation")
+        for state, per_version in (rpki.get("counts") or {}).items():
+            for v, count in per_version.items():
+                m.add("bgp_rpki_routes", count, {"state": state, "ip_version": v},
+                      help="Active routes by RPKI validation state")
+
+    # Optional integrations add their own metrics
+    for name, value, labels, help_text in extra or []:
+        m.add(name, value, labels, help=help_text)
 
     # Collector
     m.add("bgp_collector_heartbeat_timestamp_seconds", _ts(collector.get("heartbeat")),

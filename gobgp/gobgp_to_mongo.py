@@ -42,12 +42,15 @@ BATCH_WAIT = float(os.environ.get("BATCH_WAIT", "0.5"))
 NEIGHBOR_POLL_INTERVAL = float(os.environ.get("NEIGHBOR_POLL_INTERVAL", "10"))  # 0 = off
 NEIGHBOR_EVENT_DAYS = int(os.environ.get("NEIGHBOR_EVENT_DAYS", "90"))
 GOBGP_CLI = os.environ.get("GOBGP_CLI", "gobgp")
+# Prefixes that stay inactive (withdrawn / not re-learned) this long are deleted. 0 = keep forever
+INACTIVE_PREFIX_DAYS = float(os.environ.get("INACTIVE_PREFIX_DAYS", "30"))
+TTL_INDEX = "inactive_since_ttl"
 # Timestamps of the last changes kept per prefix (for the "unstable prefixes" view)
 MAX_CHANGE_TIMES = 50
 
 # Bookkeeping fields: ignored when comparing two versions of a route, not copied into the history.
 _BOOKKEEPING = {"history", "age", "active", "change_times", "last_change", "first_seen",
-                "net_start", "prefix_len"}
+                "net_start", "prefix_len", "inactive_since"}
 
 
 # --------------------------------------------------------------------------- #
@@ -84,11 +87,34 @@ def initialize_database(db: Database) -> None:
     coll.create_index([("ip_version", ASCENDING), ("net_start", ASCENDING)])
     coll.create_index("last_change", sparse=True)
     backfill_range_fields(db)
-    result = coll.update_many({"active": True}, {"$set": {"active": False}})
+    now = datetime.now(timezone.utc)
+    result = coll.update_many({"active": True},
+                              {"$set": {"active": False}, "$min": {"inactive_since": now}})
+    # inactive documents written by older versions get a start time for the cleanup
+    coll.update_many({"active": False, "inactive_since": {"$exists": False}},
+                     {"$set": {"inactive_since": now}})
+    ensure_cleanup_index(db, INACTIVE_PREFIX_DAYS)
     db["collector_status"].update_one(
         {"_id": "collector"},
         {"$set": {"started": datetime.now(timezone.utc)}}, upsert=True)
     log.info("Database initialised, %d prefixes marked inactive", result.modified_count)
+
+
+def ensure_cleanup_index(db: Database, days: float) -> None:
+    """TTL index: MongoDB deletes prefixes that have been inactive for *days* days."""
+    coll = db["bgp"]
+    existing = coll.index_information().get(TTL_INDEX)
+    if days <= 0:
+        if existing:
+            coll.drop_index(TTL_INDEX)
+            log.info("Automatic deletion of inactive prefixes disabled")
+        return
+    seconds = int(days * 86400)
+    if existing is None:
+        coll.create_index("inactive_since", name=TTL_INDEX, expireAfterSeconds=seconds)
+    elif existing.get("expireAfterSeconds") != seconds:
+        db.command("collMod", "bgp", index={"name": TTL_INDEX, "expireAfterSeconds": seconds})
+    log.info("Prefixes inactive for more than %g days are deleted automatically", days)
 
 
 def net_fields(prefix: str) -> dict:
@@ -270,6 +296,10 @@ def plan_update(new: dict, old: dict | None,
     else:
         changed = True
         update = {"$set": {**new, "last_change": now}, "$push": _history_push(old, now)}
+    if new["active"]:
+        update["$unset"] = {"inactive_since": ""}
+    else:  # keep the time it became inactive
+        update["$min"] = {"inactive_since": now}
     return UpdateOne({"_id": new["_id"]}, update, upsert=True), new, changed
 
 
