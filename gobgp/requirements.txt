@@ -1,1 +1,1 @@
-pymongo>=4.13,<5
+pymongo==4.20.1
