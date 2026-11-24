@@ -47,7 +47,7 @@ class Settings:
     # Akvorado ([akvorado]): ClickHouse HTTP interface, empty = disabled (prefix counts are used)
     akvorado_clickhouse_url: str = ""
     akvorado_database: str = "default"
-    akvorado_table: str = "flows"
+    akvorado_table: str = "flows_5m0s"
     akvorado_window_hours: float = 24
     akvorado_user: str = ""
     akvorado_password: str = ""

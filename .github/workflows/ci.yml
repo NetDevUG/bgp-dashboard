@@ -22,9 +22,19 @@ jobs:
     services:
       mongo:
         image: mongo:8
+      clickhouse:   # stands in for Akvorado's ClickHouse
+        image: clickhouse/clickhouse-server:latest
+        env:
+          CLICKHOUSE_USER: akvorado
+          CLICKHOUSE_PASSWORD: secret
+        options: >-
+          --health-cmd "wget -qO- http://127.0.0.1:8123/ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       TEST_MONGO_URI: mongodb://mongo:27017
-      REQUIRE_MONGO: "1"   # fail instead of skipping the MongoDB tests
+      REQUIRE_MONGO: "1"        # fail instead of skipping the MongoDB tests
+      TEST_CLICKHOUSE_URL: http://clickhouse:8123/
+      REQUIRE_CLICKHOUSE: "1"
     steps:
       - uses: actions/checkout@v6
       - name: Install dependencies

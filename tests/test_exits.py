@@ -145,3 +145,22 @@ async def test_customers_enabled(exits_db):
         assert s["own_ipv4_prefixes"] == 1      # no originated community configured: empty AS path
         assert "bgp_customers 2" in (await http.get("/metrics")).text
     await ctx.__aexit__(None, None, None)
+
+
+async def test_transit_instead_ranked_by_traffic(exits_db):
+    from pymongo import AsyncMongoClient
+    from app.config import Settings
+    from app.dns_cache import DnsCache
+    from app.exits import exit_analysis
+    settings = Settings(transit_community="216333:100:100", peer_learned_community="216333:100:120",
+                        location_community_prefix="216333:105:")
+    coll = AsyncMongoClient(MONGO_URI)[DB_NAME]["bgp"]
+    dns = DnsCache(None)
+
+    async def no_dns(name, rdtype="A"):
+        return []
+    dns.resolve = no_dns
+    without = (await exit_analysis(coll, settings, dns))["transit_instead_of_peering"]
+    assert without["ranked_by"] == "prefixes" and without["asns"][0]["traffic_bps"] is None
+    with_traffic = (await exit_analysis(coll, settings, dns, traffic={13335: 5e6}))["transit_instead_of_peering"]
+    assert with_traffic["ranked_by"] == "traffic" and with_traffic["asns"][0]["traffic_bps"] == 5e6

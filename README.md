@@ -113,6 +113,20 @@ originated_community = "216333:100:130"
 Only the best path per prefix is known: RouterOS sends only active paths, also with BGP
 Add-Path, so backup paths are not visible.
 
+###### Akvorado (optional)
+If you run [Akvorado](https://github.com/akvorado/akvorado), the dashboard reads the outgoing
+traffic per destination AS (flows leaving through external interfaces, last 24 h) from its
+ClickHouse and ranks "via transit although the origin AS is a direct peer" and the peering
+suggestions by traffic instead of prefix counts:
+```toml
+[akvorado]
+clickhouse_url = "http://akvorado.example.net:8123/"   # ClickHouse HTTP interface
+table = "flows_5m0s"                                    # consolidated 5-minute table (default)
+```
+User and password go into `.env` (`AKVORADO_CLICKHOUSE_USER`, `AKVORADO_CLICKHOUSE_PASSWORD`); a user
+with `SELECT` on the Akvorado database is enough. The ClickHouse port of the Akvorado compose setup
+has to be reachable from the dashboard host.
+
 ###### RPKI
 With an RPKI validator (Routinator, rpki-client) every active route is validated (RFC 6811) every
 15 minutes: totals of valid / invalid / not-found routes, a list of all invalid routes with the
@@ -218,6 +232,7 @@ API
 | `GET /bgp/api/v1.0/neighbors/events?hours=168` | session state changes |
 | `GET /bgp/api/v1.0/own-prefixes` | result of the own prefix checks |
 | `GET /bgp/api/v1.0/unstable` | prefixes with the most changes |
+| `GET /bgp/api/v1.0/akvorado` | status of the Akvorado traffic data, top destination ASNs |
 | `GET /bgp/api/v1.0/rpki` | RPKI validation summary and invalid routes |
 | `GET /bgp/api/v1.0/exits` | exits by location and type, peers by location, transit although peered |
 | `GET /metrics` | Prometheus metrics |

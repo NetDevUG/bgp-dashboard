@@ -46,7 +46,9 @@ def _type_expression(settings: Settings) -> dict:
     return {"$switch": {"branches": branches, "default": "other"}}
 
 
-async def exit_analysis(coll, settings: Settings, dns: DnsCache) -> dict:
+async def exit_analysis(coll, settings: Settings, dns: DnsCache,
+                        traffic: dict[int, float] | None = None) -> dict:
+    """*traffic*: optional outgoing bit/s per destination AS (Akvorado) to rank by traffic."""
     if not configured(settings):
         return {"configured": False}
 
@@ -113,15 +115,19 @@ async def exit_analysis(coll, settings: Settings, dns: DnsCache) -> dict:
         transit_instead = {
             "available": True,
             "total_prefixes": sum(r["count"] for r in transit_rows),
-            "asns": [{
+            "ranked_by": "traffic" if traffic else "prefixes",
+            "asns": sorted(({
                 "asn": r["_id"],
+                "traffic_bps": traffic.get(r["_id"]) if traffic else None,
                 "name": asn_names.get(r["_id"]),
                 "prefixes_via_transit": r["count"],
                 "prefixes_via_peering": peers[r["_id"]]["prefixes"],
                 "peering_locations": sorted(filter(None, map(loc_name, peers[r["_id"]]["locations"]))),
                 "transit_locations": sorted(filter(None, map(loc_name, r["transit_locations"]))),
                 "samples": r["samples"],
-            } for r in transit_rows],
+            } for r in transit_rows),
+                key=lambda a: (-(a["traffic_bps"] or 0), -a["prefixes_via_transit"]) if traffic
+                else -a["prefixes_via_transit"]),
         }
 
     return {"configured": True, "types": list(TYPES), "locations": location_list,

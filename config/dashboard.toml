@@ -59,6 +59,18 @@ originated_community = "216333:100:130"
 vrp_url = ""
 refresh_minutes = 15
 
+[akvorado]
+# Optional: outgoing traffic per destination AS from Akvorado's ClickHouse, used to rank
+# "via transit although peered" and the peering suggestions by traffic instead of
+# prefix counts. Empty = disabled. ClickHouse HTTP interface (port 8123) of the Akvorado host:
+#   clickhouse_url = "http://akvorado.example.net:8123/"
+# User and password: AKVORADO_CLICKHOUSE_USER / AKVORADO_CLICKHOUSE_PASSWORD in .env
+# (a user with SELECT on the Akvorado database is enough, readonly = 1 is fine).
+clickhouse_url = ""
+database = "default"
+table = "flows_5m0s"
+window_hours = 24
+
 # Names shown for BGP communities
 [communities]
 "216333:100:100" = "Transit"

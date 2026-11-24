@@ -22,6 +22,7 @@ from .dns_cache import DnsCache
 from .lookups import InvalidQuery, Lookups
 from . import monitoring
 from .metrics import render_metrics
+from .akvorado import AkvoradoService
 from .rpki import RpkiService
 from .stats import StatsService
 
@@ -47,9 +48,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         db = client[settings.mongo_db]
         dns = DnsCache(db, timeout=settings.dns_timeout)
         rpki = RpkiService(settings, dns)
-        stats = StatsService(db, settings, dns, rpki=rpki)
+        akvorado = AkvoradoService(settings)
+        stats = StatsService(db, settings, dns, rpki=rpki, akvorado=akvorado)
         app.state.client, app.state.db = client, db
         app.state.dns, app.state.stats, app.state.rpki = dns, stats, rpki
+        app.state.akvorado = akvorado
         app.state.lookups = Lookups(db, settings, dns, rpki=rpki)
 
         tasks = []
@@ -59,6 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await stats.ensure_indexes()
             if rpki.enabled:
                 tasks.append(asyncio.create_task(rpki.run(), name="rpki-refresh"))
+            if akvorado.enabled:
+                tasks.append(asyncio.create_task(akvorado.run(), name="akvorado-refresh"))
             tasks.append(asyncio.create_task(stats.run(), name="stats-refresh"))
         try:
             yield
@@ -121,6 +126,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "ownPrefixesConfigured": len(settings.own_prefixes),
                 "exitsConfigured": bool(settings.location_community_prefix or settings.peer_learned_community),
                 "rpkiEnabled": bool(settings.rpki_vrp_url),
+                "akvoradoEnabled": bool(settings.akvorado_clickhouse_url),
             },
         })
 
@@ -201,6 +207,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """RPKI route origin validation of all active routes (Routinator VRPs)."""
         return request.app.state.rpki.data
 
+    @app.get(f"{API}/akvorado", tags=["monitoring"])
+    async def get_akvorado(request: Request):
+        """Status of the Akvorado traffic data (top destination ASNs by outgoing traffic)."""
+        return request.app.state.akvorado.data
+
     @app.get("/metrics", response_class=PlainTextResponse, tags=["monitoring"])
     async def metrics(request: Request):
         """Prometheus metrics."""
@@ -211,8 +222,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             collector = await monitoring.collector_status(db)
         except Exception:  # noqa: BLE001 - still export the cached statistics
             sessions, collector = {}, {}
+        akv = request.app.state.akvorado
+        extra = []
+        if akv.enabled:
+            extra = [("bgp_akvorado_ok", akv.data["ok"], None, "1 if the last Akvorado query succeeded"),
+                     ("bgp_akvorado_outgoing_bps", float(akv.data["total_bps"]), None,
+                      "Average outgoing external traffic in the Akvorado window")]
         text = render_metrics(settings, stats.data, stats.ready, stats.last_error, sessions, collector,
-                              rpki=request.app.state.rpki.data)
+                              rpki=request.app.state.rpki.data, extra=extra)
         return PlainTextResponse(text, media_type="text/plain; version=0.0.4; charset=utf-8")
 
     # ------------------------------------------------------------------ #

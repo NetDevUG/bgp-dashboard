@@ -35,8 +35,9 @@ def _timestamp() -> str:
 
 
 class StatsService:
-    def __init__(self, db, settings: Settings, dns: DnsCache, rpki=None):
+    def __init__(self, db, settings: Settings, dns: DnsCache, rpki=None, akvorado=None):
         self.rpki = rpki
+        self.akvorado = akvorado
         self.db = db
         self.coll = db["bgp"]
         self.settings = settings
@@ -219,7 +220,8 @@ class StatsService:
             self.nexthop_breakdown(), self.cidrs(), self.avg_as_path_len(),
             self.communities_count(), self.customer_asns(),
             unstable_prefixes(self.coll, self.settings, self.dns),
-            exit_analysis(self.coll, self.settings, self.dns))
+            exit_analysis(self.coll, self.settings, self.dns,
+                          traffic=self.akvorado.traffic() if self.akvorado else None))
 
         by_nexthop = {row["_id"]: row for row in nexthop_rows}
         relevant = list(set(by_nexthop) | set(customer_asns))

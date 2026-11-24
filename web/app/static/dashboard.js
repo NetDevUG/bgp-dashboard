@@ -489,6 +489,12 @@
     { key: "originated", label: "Own (originated)", color: "var(--series-3)" },
     { key: "other", label: "Other", color: "var(--series-4)", darkInk: true },
   ];
+  function fmtBps(bps) {
+    if (bps === null || bps === undefined) return "–";
+    const units = [["Tbit/s", 1e12], ["Gbit/s", 1e9], ["Mbit/s", 1e6], ["kbit/s", 1e3]];
+    for (const [unit, f] of units) if (bps >= f) return `${(bps / f).toFixed(bps / f >= 100 ? 0 : 1)} ${unit}`;
+    return `${Math.round(bps)} bit/s`;
+  }
   const shortLoc = (name) => String(name || "").replace(/^Location\s+/i, "");
 
   function renderExits(s) {
@@ -551,11 +557,15 @@
     if (tip && tip.available) {
       tipBox = el("div", {},
         el("h3", { text: `Via transit although the origin AS is a direct peer · ${fmt(tip.total_prefixes)} prefixes` }),
-        el("p", { class: "explain", text: "These networks peer with you, but the listed prefixes are reached via transit: the peer does not announce them to you (or not at that location), or your policy prefers transit." }),
+        el("p", { class: "explain", text: "These networks peer with you, but the listed prefixes are reached via transit: the peer does not announce them to you (or not at that location), or your policy prefers transit." +
+          (tip.ranked_by === "traffic" ? " Sorted by your outgoing traffic to the AS (Akvorado)." : " Sorted by prefix count; configure [akvorado] to sort by traffic.") }),
         tip.asns.length ? el("div", { class: "table-wrap short" }, el("table", { class: "data" },
-          el("thead", {}, el("tr", {}, ...["Origin AS", "Via transit", "Via peering", "Peering at", "Examples"].map((h, i) => el("th", { class: i === 1 || i === 2 ? "num" : null, text: h })))),
+          el("thead", {}, el("tr", {}, ...["Origin AS", tip.ranked_by === "traffic" ? "Traffic ▼" : null, "Via transit", "Via peering", "Peering at", "Examples"]
+            .filter(Boolean).map((h) => el("th", { class: /Traffic|Via/.test(h) ? "num" : null, text: h,
+              title: h.startsWith("Traffic") ? "Average outgoing traffic to this AS (Akvorado)" : null })))),
           el("tbody", {}, ...tip.asns.map((a) => el("tr", {},
             el("td", {}, asLink(a.asn), a.name && a.name !== "(DNS Error)" ? el("span", { class: "cell-sub", text: a.name }) : null),
+            tip.ranked_by === "traffic" ? el("td", { class: "num", text: fmtBps(a.traffic_bps) }) : null,
             el("td", { class: "num", text: fmt(a.prefixes_via_transit) }),
             el("td", { class: "num", text: fmt(a.prefixes_via_peering) }),
             el("td", { class: "small", text: a.peering_locations.map(shortLoc).join(", ") || "–" }),
